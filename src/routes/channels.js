@@ -276,6 +276,62 @@ router.post('/bulk-alternatives', (req, res) => {
   res.status(201).json({ ok: true });
 });
 
+// ── POST /api/channels/bulk-delete ───────────────────────────────────────────
+router.post('/bulk-delete', (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ids array required.' });
+  }
+  const del = db.transaction((ids) => {
+    for (const id of ids) {
+      db.prepare('DELETE FROM channels WHERE id = ?').run(id);
+    }
+  });
+  del(ids);
+  res.json({ ok: true });
+});
+
+// ── PATCH /api/channels/bulk-toggle ──────────────────────────────────────────
+router.patch('/bulk-toggle', (req, res) => {
+  const { ids, is_active } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ids array required.' });
+  }
+  const toggle = db.transaction((ids) => {
+    for (const id of ids) {
+      if (is_active !== undefined) {
+        db.prepare('UPDATE channels SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(is_active ? 1 : 0, id);
+      } else {
+        const ch = db.prepare('SELECT is_active FROM channels WHERE id = ?').get(id);
+        if (ch) {
+          db.prepare('UPDATE channels SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(ch.is_active ? 0 : 1, id);
+        }
+      }
+    }
+  });
+  toggle(ids);
+  res.json({ ok: true });
+});
+
+// ── PATCH /api/channels/bulk-edit ────────────────────────────────────────────
+router.patch('/bulk-edit', (req, res) => {
+  const { ids, groupId } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ids array required.' });
+  }
+  const gId = (groupId === null || groupId === '' || groupId === undefined) ? null : Number(groupId);
+  const edit = db.transaction((ids) => {
+    for (const id of ids) {
+      db.prepare('UPDATE channels SET group_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(gId, id);
+    }
+  });
+  edit(ids);
+  res.json({ ok: true });
+});
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function sanitizeChannelInput(body) {

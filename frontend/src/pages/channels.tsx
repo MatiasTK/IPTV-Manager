@@ -4,13 +4,18 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '@/components/layout/page-header'
 import { StatCard } from '@/components/shared/stat-card'
-import { HealthBadge, HealthDot } from '@/components/shared/health-badge'
+import { HealthBadge } from '@/components/shared/health-badge'
 import { EmptyState } from '@/components/shared/empty-state'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { ChannelFormDialog } from '@/components/channels/channel-form-dialog'
 import { AlternativesDialog } from '@/components/channels/alternatives-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from '@/components/ui/dialog'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
@@ -25,8 +30,12 @@ import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MoreHorizontal } from 'lucide-react'
-import { useChannels, useDeleteChannel, useToggleChannel, useCheckChannelHealth } from '@/hooks/use-channels'
+import {
+  useChannels, useDeleteChannel, useToggleChannel, useCheckChannelHealth,
+  useBulkDeleteChannels, useBulkToggleChannels, useBulkEditChannelsGroup,
+} from '@/hooks/use-channels'
 import { useGroups } from '@/hooks/use-groups'
+import { useSources } from '@/hooks/use-sources'
 import { useHealthStatus } from '@/hooks/use-health'
 import { formatLatency } from '@/lib/utils'
 import type { Channel, HealthStatus } from '@/lib/types'
@@ -35,25 +44,67 @@ import { toast } from 'sonner'
 export default function ChannelsPage() {
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState<string>('all')
+  const [sourceFilter, setSourceFilter] = useState<string>('all')
   const [healthFilter, setHealthFilter] = useState<string>('all')
   const [formOpen, setFormOpen] = useState(false)
   const [editChannel, setEditChannel] = useState<Channel | null>(null)
   const [altChannel, setAltChannel] = useState<Channel | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Channel | null>(null)
 
+  // Selection states
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [bulkEditOpen, setBulkEditOpen] = useState(false)
+  const [bulkGroupId, setBulkGroupId] = useState<string>('none')
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+
   const { data: channelsData, isLoading } = useChannels({ limit: 500 })
   const { data: groupsData } = useGroups()
+  const { data: sourcesData } = useSources()
   const { data: healthData } = useHealthStatus()
   const deleteChannel = useDeleteChannel()
   const toggleChannel = useToggleChannel()
   const checkHealth = useCheckChannelHealth()
+
+  // Bulk actions mutations
+  const bulkDelete = useBulkDeleteChannels()
+  const bulkToggle = useBulkToggleChannels()
+  const bulkEditGroup = useBulkEditChannelsGroup()
+
+  const handleBulkToggle = async (is_active?: number) => {
+    try {
+      await bulkToggle.mutateAsync({ ids: selectedIds, is_active })
+      toast.success('Estado actualizado para los canales seleccionados')
+      setSelectedIds([])
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al cambiar estado')
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    try {
+      await bulkDelete.mutateAsync(selectedIds)
+      toast.success('Canales eliminados')
+      setSelectedIds([])
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al eliminar canales')
+    } finally {
+      setBulkDeleteOpen(false)
+    }
+  }
 
   const channels = channelsData?.channels ?? []
   const summary = healthData?.summary
 
   const filtered = useMemo(() => {
     return channels.filter((c) => {
-      if (groupFilter !== 'all' && String(c.group_id) !== groupFilter) return false
+      if (groupFilter !== 'all') {
+        if (groupFilter === 'none') {
+          if (c.group_id !== null && c.group_id !== undefined) return false
+        } else if (String(c.group_id) !== groupFilter) {
+          return false
+        }
+      }
+      if (sourceFilter !== 'all' && String(c.source_id) !== sourceFilter) return false
       if (healthFilter !== 'all' && c.health_status !== healthFilter) return false
       if (search) {
         const q = search.toLowerCase()
@@ -61,7 +112,7 @@ export default function ChannelsPage() {
       }
       return true
     })
-  }, [channels, groupFilter, healthFilter, search])
+  }, [channels, groupFilter, sourceFilter, healthFilter, search])
 
   const handleDelete = async () => {
     if (!deleteTarget) return
@@ -124,48 +175,128 @@ export default function ChannelsPage() {
         <StatCard icon={Activity} label="Caídos" value={summary?.down ?? 0} color="red" />
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-4">
-        <div className="relative flex-1 min-w-48">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="Buscar canal..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+      {/* Filters or Bulk Actions */}
+      {selectedIds.length > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-muted/40 border border-border rounded-xl mb-4 animate-in fade-in slide-in-from-top-1 duration-200">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-foreground">
+              {selectedIds.length} {selectedIds.length === 1 ? 'canal seleccionado' : 'canales seleccionados'}
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])} className="text-xs h-8 text-muted-foreground hover:text-foreground">
+              Deseleccionar todo
+            </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Toggle Status */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  Alternar estado
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem onClick={() => handleBulkToggle(1)}>
+                  Activar seleccionados
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleBulkToggle(0)}>
+                  Desactivar seleccionados
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleBulkToggle()}>
+                  Invertir estado
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Edit Group */}
+            <Button variant="outline" size="sm" onClick={() => setBulkEditOpen(true)}>
+              Editar grupo
+            </Button>
+
+            {/* Delete */}
+            <Button variant="destructive" size="sm" onClick={() => setBulkDeleteOpen(true)}>
+              <Trash2 className="w-4 h-4 mr-2" />
+              Eliminar
+            </Button>
+          </div>
         </div>
-        <Select value={groupFilter} onValueChange={setGroupFilter}>
-          <SelectTrigger className="w-44">
-            <SelectValue placeholder="Todos los grupos" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todos los grupos</SelectItem>
-            {groupsData?.groups.map((g) => (
-              <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={healthFilter} onValueChange={setHealthFilter}>
-          <SelectTrigger className="w-44">
-            <SelectValue placeholder="Todos los estados" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todos los estados</SelectItem>
-            <SelectItem value="healthy">Saludable</SelectItem>
-            <SelectItem value="degraded">Lento</SelectItem>
-            <SelectItem value="down">Caído</SelectItem>
-            <SelectItem value="unknown">Desconocido</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      ) : (
+        /* Filters */
+        <div className="flex flex-wrap gap-3 mb-4">
+          <div className="relative flex-1 min-w-48">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              placeholder="Buscar canal..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <Select value={groupFilter} onValueChange={setGroupFilter}>
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="Todos los grupos" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos los grupos</SelectItem>
+              {groupsData?.groups.map((g) => (
+                <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
+              ))}
+              <SelectItem value="none">Sin grupo</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="Todas las fuentes" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas las fuentes</SelectItem>
+              {sourcesData?.sources.map((s) => (
+                <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={healthFilter} onValueChange={setHealthFilter}>
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="Todos los estados" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos los estados</SelectItem>
+              <SelectItem value="healthy">Saludable</SelectItem>
+              <SelectItem value="degraded">Lento</SelectItem>
+              <SelectItem value="down">Caído</SelectItem>
+              <SelectItem value="unknown">Desconocido</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       {/* Table */}
       <div className="rounded-xl border border-border bg-card overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent border-border">
-              <TableHead className="w-8"></TableHead>
+              <TableHead className="w-12">
+                <Checkbox
+                  checked={
+                    filtered.length > 0 && filtered.every((ch) => selectedIds.includes(ch.id))
+                      ? true
+                      : filtered.some((ch) => selectedIds.includes(ch.id))
+                      ? "indeterminate"
+                      : false
+                  }
+                  onCheckedChange={(checked) => {
+                    if (checked === true) {
+                      const allFilteredIds = filtered.map((ch) => ch.id)
+                      setSelectedIds((prev) => {
+                        const newIds = allFilteredIds.filter((id) => !prev.includes(id))
+                        return [...prev, ...newIds]
+                      })
+                    } else {
+                      const filteredIds = filtered.map((ch) => ch.id)
+                      setSelectedIds((prev) => prev.filter((id) => !filteredIds.includes(id)))
+                    }
+                  }}
+                />
+              </TableHead>
               <TableHead>Canal</TableHead>
               <TableHead>Grupo</TableHead>
               <TableHead>Estado</TableHead>
@@ -200,9 +331,18 @@ export default function ChannelsPage() {
                   key={channel.id}
                   className={channel.is_active === 0 ? 'opacity-50' : ''}
                 >
-                  {/* Health dot */}
+                  {/* Select Checkbox */}
                   <TableCell>
-                    <HealthDot status={channel.health_status as HealthStatus} />
+                    <Checkbox
+                      checked={selectedIds.includes(channel.id)}
+                      onCheckedChange={(checked) => {
+                        setSelectedIds((prev) =>
+                          checked === true
+                            ? [...prev, channel.id]
+                            : prev.filter((id) => id !== channel.id)
+                        )
+                      }}
+                    />
                   </TableCell>
 
                   {/* Name + logo */}
@@ -316,6 +456,63 @@ export default function ChannelsPage() {
         confirmLabel="Eliminar"
         onConfirm={handleDelete}
       />
+      <ConfirmDialog
+        open={bulkDeleteOpen}
+        onOpenChange={setBulkDeleteOpen}
+        title="Eliminar canales"
+        description={`¿Eliminar los ${selectedIds.length} canales seleccionados? Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        onConfirm={handleBulkDelete}
+      />
+      <Dialog open={bulkEditOpen} onOpenChange={setBulkEditOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Asignar grupo</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Selecciona el grupo que deseas asignar a los {selectedIds.length} canales seleccionados.
+            </p>
+            <div className="space-y-1.5">
+              <Label>Grupo</Label>
+              <Select
+                value={bulkGroupId}
+                onValueChange={setBulkGroupId}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Sin grupo" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Sin grupo</SelectItem>
+                  {groupsData?.groups.map((g) => (
+                    <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkEditOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={async () => {
+                try {
+                  const groupId = bulkGroupId === 'none' ? null : Number(bulkGroupId)
+                  await bulkEditGroup.mutateAsync({ ids: selectedIds, groupId })
+                  toast.success('Grupo actualizado para los canales seleccionados')
+                  setSelectedIds([])
+                  setBulkEditOpen(false)
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : 'Error al actualizar grupo')
+                }
+              }}
+            >
+              Aplicar grupo
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

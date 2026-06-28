@@ -71,6 +71,7 @@ export interface ChannelWithAlternatives extends Channel {
 export interface ChannelFilters {
   search?: string
   groupId?: number | ''
+  sourceId?: number | ''
   health?: HealthStatus | ''
   limit?: number
   page?: number

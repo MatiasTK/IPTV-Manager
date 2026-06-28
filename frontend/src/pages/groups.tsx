@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { FolderOpen, Plus, Pencil, Trash2, ArrowUp, ArrowDown, Loader2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { FolderOpen, Plus, Pencil, Trash2, ArrowUp, ArrowDown, Loader2, Sparkles } from 'lucide-react'
 import { PageHeader } from '@/components/layout/page-header'
 import { EmptyState } from '@/components/shared/empty-state'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
@@ -14,7 +15,10 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useGroups, useCreateGroup, useUpdateGroup, useDeleteGroup, useReorderGroups } from '@/hooks/use-groups'
+import {
+  useGroups, useCreateGroup, useUpdateGroup, useDeleteGroup, useReorderGroups,
+  useAutoSuggestGroups, useApplyAutoSuggest
+} from '@/hooks/use-groups'
 import type { Group } from '@/lib/types'
 import { toast } from 'sonner'
 
@@ -29,6 +33,23 @@ export default function GroupsPage() {
   const [editGroup, setEditGroup] = useState<Group | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Group | null>(null)
   const [name, setName] = useState('')
+
+  // Auto-suggest states
+  const [suggestOpen, setSuggestOpen] = useState(false)
+  const [selectedSuggestGroups, setSelectedSuggestGroups] = useState<Record<string, boolean>>({})
+
+  const { data: suggestData, isLoading: suggestLoading } = useAutoSuggestGroups(suggestOpen)
+  const applySuggest = useApplyAutoSuggest()
+
+  useEffect(() => {
+    if (suggestData?.suggestions) {
+      const initial: Record<string, boolean> = {}
+      suggestData.suggestions.forEach((s) => {
+        initial[s.groupName] = true
+      })
+      setSelectedSuggestGroups(initial)
+    }
+  }, [suggestData])
 
   const groups = data?.groups ?? []
 
@@ -99,10 +120,16 @@ export default function GroupsPage() {
         subtitle="Organización de canales por categorías"
         icon={FolderOpen}
         actions={
-          <Button onClick={handleOpenCreate}>
-            <Plus className="w-4 h-4 mr-2" />
-            Crear grupo
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setSuggestOpen(true)}>
+              <Sparkles className="w-4 h-4 mr-2" />
+              Autogrupar canales
+            </Button>
+            <Button onClick={handleOpenCreate}>
+              <Plus className="w-4 h-4 mr-2" />
+              Crear grupo
+            </Button>
+          </div>
         }
       />
 
@@ -231,6 +258,100 @@ export default function GroupsPage() {
         confirmLabel="Eliminar"
         onConfirm={handleDelete}
       />
+
+      {/* Auto Suggest Dialog */}
+      <Dialog open={suggestOpen} onOpenChange={setSuggestOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Sugerencias de Agrupamiento Automático</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Hemos analizado tus canales sin grupo y te sugerimos las siguientes categorías según sus nombres.
+            </p>
+
+            {suggestLoading ? (
+              <div className="flex flex-col items-center justify-center py-8 space-y-2">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <span className="text-sm text-muted-foreground">Analizando canales...</span>
+              </div>
+            ) : !suggestData?.suggestions || suggestData.suggestions.length === 0 ? (
+              <div className="text-center py-6">
+                <span className="text-sm text-muted-foreground">No se encontraron canales sin grupo para agrupar automáticamente.</span>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {suggestData.suggestions.map((s) => {
+                  const isChecked = !!selectedSuggestGroups[s.groupName]
+                  return (
+                    <div key={s.groupName} className="border border-border rounded-lg p-3 bg-muted/20 space-y-2">
+                      <div className="flex items-center justify-between border-b border-border/50 pb-2">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id={`group-chk-${s.groupName}`}
+                            checked={isChecked}
+                            onCheckedChange={(checked) => {
+                              setSelectedSuggestGroups((prev) => ({
+                                ...prev,
+                                [s.groupName]: checked === true,
+                              }))
+                            }}
+                          />
+                          <Label htmlFor={`group-chk-${s.groupName}`} className="font-semibold text-sm cursor-pointer ml-1.5">
+                            {s.groupName}
+                          </Label>
+                        </div>
+                        <Badge variant="secondary">{s.channels.length} {s.channels.length === 1 ? 'canal' : 'canales'}</Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {s.channels.map((ch) => (
+                          <Badge key={ch.id} variant="outline" className="text-xs font-normal">
+                            {ch.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSuggestOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={
+                suggestLoading ||
+                !suggestData?.suggestions ||
+                suggestData.suggestions.length === 0 ||
+                applySuggest.isPending ||
+                !Object.values(selectedSuggestGroups).some(Boolean)
+              }
+              onClick={async () => {
+                if (!suggestData?.suggestions) return
+                const payload = suggestData.suggestions
+                  .filter((s) => selectedSuggestGroups[s.groupName])
+                  .map((s) => ({
+                    groupName: s.groupName,
+                    channelIds: s.channels.map((ch) => ch.id),
+                  }))
+
+                try {
+                  await applySuggest.mutateAsync(payload)
+                  toast.success('Agrupamientos aplicados correctamente')
+                  setSuggestOpen(false)
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : 'Error al aplicar agrupamiento')
+                }
+              }}
+            >
+              {applySuggest.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Aplicar {Object.values(selectedSuggestGroups).filter(Boolean).length} grupos
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

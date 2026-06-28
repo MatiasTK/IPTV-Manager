@@ -6,6 +6,7 @@ function buildChannelsUrl(filters: ChannelFilters = {}) {
   const params = new URLSearchParams()
   if (filters.search) params.set('search', filters.search)
   if (filters.groupId) params.set('groupId', String(filters.groupId))
+  if (filters.sourceId) params.set('sourceId', String(filters.sourceId))
   if (filters.health) params.set('health', filters.health)
   params.set('limit', String(filters.limit ?? 500))
   if (filters.page) params.set('page', String(filters.page))
@@ -105,5 +106,31 @@ export function useCheckChannelHealth() {
       api.post<{ channel: Channel; result: { status: string; latencyMs: number } }>(
         `/api/health/check/${id}`
       ),
+  })
+}
+
+export function useBulkDeleteChannels() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: number[]) => api.post('/api/channels/bulk-delete', { ids }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['channels'] }),
+  })
+}
+
+export function useBulkToggleChannels() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ ids, is_active }: { ids: number[]; is_active?: number }) =>
+      api.patch('/api/channels/bulk-toggle', { ids, is_active }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['channels'] }),
+  })
+}
+
+export function useBulkEditChannelsGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ ids, groupId }: { ids: number[]; groupId: number | null }) =>
+      api.patch('/api/channels/bulk-edit', { ids, groupId }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['channels'] }),
   })
 }

@@ -46,3 +46,24 @@ export function useReorderGroups() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['groups'] }),
   })
 }
+
+export function useAutoSuggestGroups(enabled = false) {
+  return useQuery({
+    queryKey: ['groups', 'auto-suggest'],
+    queryFn: () => api.get<{ suggestions: { groupName: string; channels: { id: number; name: string }[] }[] }>('/api/groups/auto-suggest'),
+    enabled,
+    staleTime: 0,
+  })
+}
+
+export function useApplyAutoSuggest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (suggestions: { groupName: string; channelIds: number[] }[]) =>
+      api.post('/api/groups/auto-suggest/apply', { suggestions }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['groups'] })
+      qc.invalidateQueries({ queryKey: ['channels'] })
+    },
+  })
+}

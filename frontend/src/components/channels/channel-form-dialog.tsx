@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { Loader2 } from 'lucide-react'
 import {
@@ -56,6 +56,38 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
       referrer: channel?.referrer ?? '',
     },
   })
+
+  useEffect(() => {
+    if (open) {
+      reset({
+        name: channel?.name ?? '',
+        url: channel?.url ?? '',
+        tvgId: channel?.tvg_id ?? '',
+        tvgName: channel?.tvg_name ?? '',
+        tvgLogo: channel?.tvg_logo ?? '',
+        groupId: channel?.group_id ? String(channel.group_id) : '',
+        catchup: channel?.catchup ?? '',
+        catchupSource: channel?.catchup_source ?? '',
+        catchupDays: channel?.catchup_days ? String(channel.catchup_days) : '',
+        httpUserAgent: channel?.http_user_agent ?? '',
+        referrer: channel?.referrer ?? '',
+      })
+    } else {
+      reset({
+        name: '',
+        url: '',
+        tvgId: '',
+        tvgName: '',
+        tvgLogo: '',
+        groupId: '',
+        catchup: '',
+        catchupSource: '',
+        catchupDays: '',
+        httpUserAgent: '',
+        referrer: '',
+      })
+    }
+  }, [channel, open, reset])
 
   const groupIdValue = watch('groupId')
 
