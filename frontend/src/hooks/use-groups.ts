@@ -1,0 +1,48 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { api } from '@/lib/api'
+import type { Group } from '@/lib/types'
+
+export function useGroups() {
+  return useQuery({
+    queryKey: ['groups'],
+    queryFn: () => api.get<{ groups: Group[] }>('/api/groups'),
+    staleTime: 60_000,
+  })
+}
+
+export function useCreateGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => api.post<Group>('/api/groups', { name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['groups'] }),
+  })
+}
+
+export function useUpdateGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      api.put<Group>(`/api/groups/${id}`, { name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['groups'] }),
+  })
+}
+
+export function useDeleteGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.delete(`/api/groups/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['groups'] })
+      qc.invalidateQueries({ queryKey: ['channels'] })
+    },
+  })
+}
+
+export function useReorderGroups() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (order: { id: number; sort_order: number }[]) =>
+      api.patch('/api/groups/reorder', { order }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['groups'] }),
+  })
+}

@@ -1,0 +1,9 @@
+node_modules/
+data/
+.env
+*.db
+*.db-shm
+*.db-wal
+jwt_secret.txt
+.DS_Store
+npm-debug.log*
