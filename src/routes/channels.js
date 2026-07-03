@@ -62,7 +62,7 @@ router.get('/logo-proxy', (req, res) => {
 
 // ── GET /api/channels ──────────────────────────────────────────────────────────
 router.get('/', (req, res) => {
-  const { groupId, sourceId, health, search, page = 1, limit = 200 } = req.query;
+  const { groupId, sourceId, health, search, page = 1, limit = 100, sortBy, sortOrder } = req.query;
 
   let query = `
     SELECT
@@ -90,11 +90,24 @@ router.get('/', (req, res) => {
     params.push(pat, pat, pat);
   }
 
-  query += ' ORDER BY COALESCE((SELECT sort_order FROM groups WHERE id = c.group_id), 9999), get_base_name(c.name), COALESCE(s.priority, 9999), c.name COLLATE NOCASE, c.sort_order';
+  // Server-side sorting
+  const dir = sortOrder === 'desc' ? 'DESC' : 'ASC';
+  const sortMap = {
+    name:    `c.name COLLATE NOCASE ${dir}`,
+    group:   `g.name COLLATE NOCASE ${dir}, c.name COLLATE NOCASE ASC`,
+    source:  `s.name COLLATE NOCASE ${dir}, c.name COLLATE NOCASE ASC`,
+    status:  `c.health_status ${dir}, c.name COLLATE NOCASE ASC`,
+    latency: `c.health_latency_ms ${dir}, c.name COLLATE NOCASE ASC`,
+  };
+  const orderClause = sortMap[sortBy] ||
+    `COALESCE((SELECT sort_order FROM groups WHERE id = c.group_id), 9999),
+     get_base_name(c.name), COALESCE(s.priority, 9999),
+     c.name COLLATE NOCASE, c.sort_order`;
+  query += ` ORDER BY ${orderClause}`;
 
-  const pageNum = Math.max(1, parseInt(page, 10));
-  const limitNum = Math.min(500, Math.max(1, parseInt(limit, 10)));
-  const offset = (pageNum - 1) * limitNum;
+  const pageNum  = Math.max(1, parseInt(page, 10));
+  const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10))); // hard cap 200 per page
+  const offset   = (pageNum - 1) * limitNum;
 
   const countStmt = db.prepare(query.replace(/SELECT[\s\S]+?FROM channels/, 'SELECT COUNT(*) AS cnt FROM channels'));
   const total = countStmt.get(...params)?.cnt ?? 0;
@@ -104,6 +117,28 @@ router.get('/', (req, res) => {
 
   const channels = db.prepare(query).all(...params);
   res.json({ channels, total, page: pageNum, limit: limitNum });
+});
+
+// ── GET /api/channels/ids ──────────────────────────────────────────────────────
+// Returns only matching channel IDs (no pagination) – used for cross-page "select all"
+router.get('/ids', (req, res) => {
+  const { groupId, sourceId, health, search } = req.query;
+
+  let query = 'SELECT c.id FROM channels c WHERE 1=1';
+  const params = [];
+
+  if (groupId) { query += ' AND c.group_id = ?'; params.push(Number(groupId)); }
+  if (sourceId) { query += ' AND c.source_id = ?'; params.push(Number(sourceId)); }
+  if (health) { query += ' AND c.health_status = ?'; params.push(health); }
+  if (search) {
+    query += ' AND (c.name LIKE ? OR c.tvg_id LIKE ? OR c.url LIKE ?)';
+    const pat = `%${search}%`;
+    params.push(pat, pat, pat);
+  }
+
+  const rows = db.prepare(query).all(...params);
+  const ids = rows.map((r) => r.id);
+  res.json({ ids, total: ids.length });
 });
 
 // ── GET /api/channels/duplicates ───────────────────────────────────────────────

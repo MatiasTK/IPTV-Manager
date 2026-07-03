@@ -7,6 +7,7 @@ const { URL } = require('url');
 const db = require('../db/database');
 const { authMiddleware, csrfMiddleware } = require('../middleware/auth');
 const { parseM3U } = require('../services/m3u-parser');
+const { fetchXtreamChannels } = require('../services/xtream-fetcher');
 const { detectDuplicates } = require('../services/duplicate-detector');
 const { recalculateSourcePriorities } = require('../services/health-checker');
 
@@ -24,7 +25,11 @@ router.get('/', (req, res) => {
 
 // ── POST /api/sources ──────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { name, url, type = 'url', autoSync = 0, syncIntervalHours = 24, priority = 1, autoPriority = 1 } = req.body;
+  const {
+    name, url, type = 'url',
+    autoSync = 0, syncIntervalHours = 24, priority = 1, autoPriority = 1,
+    xtreamHost = '', xtreamUser = '', xtreamPass = '',
+  } = req.body;
 
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return res.status(400).json({ error: 'name required.' });
@@ -39,9 +44,15 @@ router.post('/', async (req, res) => {
     }
   }
 
+  if (type === 'xtream') {
+    if (!xtreamHost || !xtreamUser || !xtreamPass) {
+      return res.status(400).json({ error: 'xtreamHost, xtreamUser and xtreamPass required for type=xtream.' });
+    }
+  }
+
   const result = db.prepare(`
-    INSERT INTO sources (name, url, type, auto_sync, sync_interval_hours, priority, auto_priority)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sources (name, url, type, auto_sync, sync_interval_hours, priority, auto_priority, xtream_host, xtream_user, xtream_pass)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim().slice(0, 255),
     (url || '').trim().slice(0, 2048),
@@ -49,7 +60,10 @@ router.post('/', async (req, res) => {
     autoSync ? 1 : 0,
     Math.max(1, parseInt(syncIntervalHours || '24', 10)),
     Number(priority) || 1,
-    autoPriority ? 1 : 0
+    autoPriority ? 1 : 0,
+    String(xtreamHost).trim().slice(0, 512),
+    String(xtreamUser).trim().slice(0, 255),
+    String(xtreamPass).trim().slice(0, 255)
   );
 
   // Recalculate priorities in case autoPriority is enabled
@@ -62,17 +76,19 @@ router.post('/', async (req, res) => {
 // ── PUT /api/sources/:id ───────────────────────────────────────────────────────
 router.put('/:id', (req, res) => {
   const id = Number(req.params.id);
-  const source = db.prepare('SELECT id FROM sources WHERE id = ?').get(id);
+  const source = db.prepare('SELECT * FROM sources WHERE id = ?').get(id);
   if (!source) return res.status(404).json({ error: 'Source not found.' });
 
-  const { name, url, autoSync, syncIntervalHours, priority, autoPriority } = req.body;
+  const { name, url, autoSync, syncIntervalHours, priority, autoPriority,
+          xtreamHost, xtreamUser, xtreamPass } = req.body;
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return res.status(400).json({ error: 'name required.' });
   }
 
   db.prepare(`
     UPDATE sources
-    SET name = ?, url = ?, auto_sync = ?, sync_interval_hours = ?, priority = ?, auto_priority = ?
+    SET name = ?, url = ?, auto_sync = ?, sync_interval_hours = ?, priority = ?, auto_priority = ?,
+        xtream_host = ?, xtream_user = ?, xtream_pass = ?
     WHERE id = ?
   `).run(
     name.trim().slice(0, 255),
@@ -81,6 +97,9 @@ router.put('/:id', (req, res) => {
     Math.max(1, parseInt(syncIntervalHours || '24', 10)),
     Number(priority) || 1,
     autoPriority ? 1 : 0,
+    String(xtreamHost || source.xtream_host || '').trim().slice(0, 512),
+    String(xtreamUser || source.xtream_user || '').trim().slice(0, 255),
+    String(xtreamPass || source.xtream_pass || '').trim().slice(0, 255),
     id
   );
 
@@ -113,18 +132,36 @@ router.post('/:id/sync', async (req, res) => {
   const source = db.prepare('SELECT * FROM sources WHERE id = ?').get(id);
   if (!source) return res.status(404).json({ error: 'Source not found.' });
 
-  if (!source.url) {
-    return res.status(400).json({ error: 'Source has no URL to sync from.' });
-  }
+  let parsed;
+  let epgUrls = [];
 
-  let m3uText;
-  try {
-    m3uText = await fetchM3U(source.url);
-  } catch (err) {
-    return res.status(502).json({ error: `Failed to fetch M3U: ${err.message}` });
+  if (source.type === 'xtream') {
+    // ── Xtream Codes sync ────────────────────────────────────────────────────
+    if (!source.xtream_host || !source.xtream_user || !source.xtream_pass) {
+      return res.status(400).json({ error: 'Source is missing Xtream credentials.' });
+    }
+    try {
+      const result = await fetchXtreamChannels(source.xtream_host, source.xtream_user, source.xtream_pass);
+      parsed   = result.channels;
+      epgUrls  = result.epgUrl ? [result.epgUrl] : [];
+    } catch (err) {
+      return res.status(502).json({ error: `Failed to fetch Xtream: ${err.message}` });
+    }
+  } else {
+    // ── M3U URL sync ─────────────────────────────────────────────────────────
+    if (!source.url) {
+      return res.status(400).json({ error: 'Source has no URL to sync from.' });
+    }
+    let m3uText;
+    try {
+      m3uText = await fetchM3U(source.url);
+    } catch (err) {
+      return res.status(502).json({ error: `Failed to fetch M3U: ${err.message}` });
+    }
+    const result = parseM3U(m3uText);
+    parsed  = result.channels;
+    epgUrls = result.header.epgUrls;
   }
-
-  const { header, channels: parsed } = parseM3U(m3uText);
 
   // Import channels into DB
   const imported = importChannels(parsed, id);
@@ -151,18 +188,199 @@ router.post('/:id/sync', async (req, res) => {
     updated: imported.updated,
     total: imported.total,
     duplicatesDetected: duplicateGroups.length,
+    epgUrls,
+  });
+});
+
+// ── POST /api/sources/preview ────────────────────────────────────────────────
+// Stateless preview: parse source, detect duplicates, return channel list.
+// No DB writes.
+router.post('/preview', async (req, res) => {
+  const { type, url, text, xtreamHost, xtreamUser, xtreamPass } = req.body;
+
+  if (!['url', 'text', 'xtream'].includes(type)) {
+    return res.status(400).json({ error: 'type must be url, text, or xtream.' });
+  }
+
+  let rawChannels = [];
+
+  try {
+    if (type === 'url') {
+      if (!url) return res.status(400).json({ error: 'url required.' });
+      const m3uText = await fetchM3U(url);
+      rawChannels = parseM3U(m3uText).channels;
+    } else if (type === 'text') {
+      if (!text || text.length > MAX_M3U_SIZE) return res.status(400).json({ error: 'text required (max 10MB).' });
+      rawChannels = parseM3U(text).channels;
+    } else {
+      if (!xtreamHost || !xtreamUser || !xtreamPass) {
+        return res.status(400).json({ error: 'xtreamHost, xtreamUser and xtreamPass required.' });
+      }
+      const result = await fetchXtreamChannels(xtreamHost, xtreamUser, xtreamPass);
+      rawChannels = result.channels;
+    }
+  } catch (err) {
+    return res.status(502).json({ error: `Failed to fetch source: ${err.message}` });
+  }
+
+  // ─ Step 1: detect internal duplicates (exact URL match) ──────────────────────
+  const seenUrls = new Set();
+  let internalDuplicateCount = 0;
+  const annotated = rawChannels.map((ch) => {
+    const isInternal = seenUrls.has(ch.url);
+    if (!isInternal) seenUrls.add(ch.url);
+    else internalDuplicateCount++;
+    return { ...ch, isDuplicate: false, isInternalDuplicate: isInternal };
+  });
+
+  // ─ Step 2: batch-check against DB (only non-internal channels) ─────────────
+  const uniqueUrls = [...seenUrls]; // URLs seen (first occurrence only)
+  const dbExisting = checkDbDuplicates(uniqueUrls);
+  let dbDuplicateCount = 0;
+
+  const channels = annotated.map((ch) => {
+    const isDb = !ch.isInternalDuplicate && dbExisting.has(ch.url);
+    if (isDb) dbDuplicateCount++;
+    return { ...ch, isDuplicate: isDb };
+  });
+
+  // ─ Step 3: extract sorted unique groups ───────────────────────────────
+  const groups = [...new Set(channels.map((c) => c.groupTitle).filter(Boolean))].sort();
+
+  res.json({
+    channels,
+    groups,
+    total: channels.length,
+    dbDuplicateCount,
+    internalDuplicateCount,
+  });
+});
+
+// ── POST /api/sources/import-url ──────────────────────────────────────────────
+// Fetch M3U from URL, create source, import selected channels.
+router.post('/import-url', async (req, res) => {
+  const { name, url, selectedUrls,
+          autoSync = 0, syncIntervalHours = 24, priority = 1, autoPriority = 1 } = req.body;
+
+  if (!name || typeof name !== 'string' || name.trim().length === 0) {
+    return res.status(400).json({ error: 'name required.' });
+  }
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'url required.' });
+  }
+  try { new URL(url.trim()); } catch {
+    return res.status(400).json({ error: 'Invalid URL.' });
+  }
+
+  let m3uText;
+  try {
+    m3uText = await fetchM3U(url.trim());
+  } catch (err) {
+    return res.status(502).json({ error: `Failed to fetch M3U: ${err.message}` });
+  }
+
+  const { header, channels: parsed } = parseM3U(m3uText);
+  const urlSet = Array.isArray(selectedUrls) && selectedUrls.length > 0
+    ? new Set(selectedUrls)
+    : null;
+
+  const sourceResult = db.prepare(`
+    INSERT INTO sources (name, url, type, last_synced_at, auto_sync, sync_interval_hours, priority, auto_priority)
+    VALUES (?, ?, 'url', CURRENT_TIMESTAMP, ?, ?, ?, ?)
+  `).run(
+    name.trim().slice(0, 255),
+    url.trim().slice(0, 2048),
+    autoSync ? 1 : 0,
+    Math.max(1, parseInt(syncIntervalHours || '24', 10)),
+    Number(priority) || 1,
+    autoPriority ? 1 : 0
+  );
+
+  const sourceId = sourceResult.lastInsertRowid;
+  const imported = importChannels(parsed, sourceId, urlSet);
+
+  db.prepare('UPDATE sources SET channel_count = ? WHERE id = ?').run(imported.total, sourceId);
+  recalculateSourcePriorities();
+
+  res.status(201).json({
+    ok: true,
+    sourceId,
+    imported: imported.created,
+    updated: imported.updated,
+    skipped: imported.skipped,
+    total: parsed.length,
     epgUrls: header.epgUrls,
+  });
+});
+
+// ── POST /api/sources/import-xtream ──────────────────────────────────────────
+// One-shot Xtream import: creates source + fetches channels immediately
+router.post('/import-xtream', async (req, res) => {
+  const { name = 'Xtream Import', xtreamHost, xtreamUser, xtreamPass,
+          selectedUrls,
+          autoSync = 0, syncIntervalHours = 24, priority = 1, autoPriority = 1 } = req.body;
+
+  if (!xtreamHost || !xtreamUser || !xtreamPass) {
+    return res.status(400).json({ error: 'xtreamHost, xtreamUser and xtreamPass are required.' });
+  }
+
+  let channels, epgUrl;
+  try {
+    const result = await fetchXtreamChannels(xtreamHost, xtreamUser, xtreamPass);
+    channels = result.channels;
+    epgUrl   = result.epgUrl;
+  } catch (err) {
+    return res.status(502).json({ error: `Failed to connect to Xtream: ${err.message}` });
+  }
+
+  const urlSet = Array.isArray(selectedUrls) && selectedUrls.length > 0
+    ? new Set(selectedUrls)
+    : null;
+
+  // Create source
+  const sourceResult = db.prepare(`
+    INSERT INTO sources (name, url, type, last_synced_at, auto_sync, sync_interval_hours, priority, auto_priority, xtream_host, xtream_user, xtream_pass)
+    VALUES (?, '', 'xtream', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(name).trim().slice(0, 255),
+    autoSync ? 1 : 0,
+    Math.max(1, parseInt(syncIntervalHours || '24', 10)),
+    Number(priority) || 1,
+    autoPriority ? 1 : 0,
+    String(xtreamHost).trim().slice(0, 512),
+    String(xtreamUser).trim().slice(0, 255),
+    String(xtreamPass).trim().slice(0, 255)
+  );
+
+  const sourceId = sourceResult.lastInsertRowid;
+  const imported = importChannels(channels, sourceId, urlSet);
+
+  db.prepare('UPDATE sources SET channel_count = ? WHERE id = ?').run(imported.total, sourceId);
+  recalculateSourcePriorities();
+
+  res.json({
+    ok: true,
+    sourceId,
+    imported: imported.created,
+    updated: imported.updated,
+    skipped: imported.skipped,
+    total: channels.length,
+    epgUrl,
   });
 });
 
 // ── POST /api/sources/import-text ─────────────────────────────────────────────
 // Import M3U from pasted text (no URL)
 router.post('/import-text', (req, res) => {
-  const { text, sourceName = 'Manual Import' } = req.body;
+  const { text, sourceName = 'Manual Import', selectedUrls } = req.body;
 
   if (!text || typeof text !== 'string' || text.length > MAX_M3U_SIZE) {
     return res.status(400).json({ error: 'M3U text required (max 10MB).' });
   }
+
+  const urlSet = Array.isArray(selectedUrls) && selectedUrls.length > 0
+    ? new Set(selectedUrls)
+    : null;
 
   // Create a "manual" source
   const sourceResult = db.prepare(`
@@ -172,7 +390,7 @@ router.post('/import-text', (req, res) => {
 
   const sourceId = sourceResult.lastInsertRowid;
   const { header, channels: parsed } = parseM3U(text);
-  const imported = importChannels(parsed, sourceId);
+  const imported = importChannels(parsed, sourceId, urlSet);
 
   db.prepare('UPDATE sources SET channel_count = ? WHERE id = ?').run(imported.total, sourceId);
 
@@ -184,7 +402,8 @@ router.post('/import-text', (req, res) => {
     sourceId,
     imported: imported.created,
     updated: imported.updated,
-    total: imported.total,
+    skipped: imported.skipped,
+    total: parsed.length,
     epgUrls: header.epgUrls,
   });
 });
@@ -240,10 +459,36 @@ function fetchM3U(urlStr) {
 }
 
 /**
- * Import parsed channels into the DB, creating groups as needed.
- * Returns { created, updated, total }.
+ * Batch-check a list of URLs against the channels table.
+ * Splits into batches of 999 to respect SQLite's variable limit.
+ * Returns a Set<string> of URLs that already exist in the DB.
  */
-function importChannels(parsed, sourceId) {
+const DB_BATCH = 999;
+function checkDbDuplicates(urls) {
+  const existing = new Set();
+  if (!urls || urls.length === 0) return existing;
+  for (let i = 0; i < urls.length; i += DB_BATCH) {
+    const batch = urls.slice(i, i + DB_BATCH);
+    const placeholders = batch.map(() => '?').join(',');
+    db.prepare(`SELECT url FROM channels WHERE url IN (${placeholders})`)
+      .all(...batch)
+      .forEach((r) => existing.add(r.url));
+  }
+  return existing;
+}
+
+/**
+ * Import parsed channels into the DB, creating groups as needed.
+ * @param {Array}    parsed   - channel objects from parseM3U / fetchXtreamChannels
+ * @param {number}   sourceId - source row id
+ * @param {Set|null} urlSet   - if provided, only channels whose url is in this Set are imported
+ * Returns { created, updated, skipped, total }.
+ */
+function importChannels(parsed, sourceId, urlSet) {
+  const toImport = urlSet
+    ? parsed.filter((ch) => urlSet.has(ch.url))
+    : parsed;
+
   let created = 0;
   let updated = 0;
 
@@ -304,8 +549,10 @@ function importChannels(parsed, sourceId) {
     }
   });
 
-  importTx(parsed);
-  return { created, updated, total: created + updated };
+  importTx(toImport);
+  const skipped = parsed.length - toImport.length;
+  return { created, updated, skipped, total: created + updated };
 }
 
 module.exports = router;
+

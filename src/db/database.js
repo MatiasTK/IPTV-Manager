@@ -119,14 +119,15 @@ function initSchema() {
     );
 
     -- ─── Indexes ──────────────────────────────────────────────────────────────
-    CREATE INDEX IF NOT EXISTS idx_channels_source   ON channels(source_id);
-    CREATE INDEX IF NOT EXISTS idx_channels_group    ON channels(group_id);
-    CREATE INDEX IF NOT EXISTS idx_channels_active   ON channels(is_active);
-    CREATE INDEX IF NOT EXISTS idx_channels_health   ON channels(health_status);
-    CREATE INDEX IF NOT EXISTS idx_hc_channel        ON health_checks(channel_id);
-    CREATE INDEX IF NOT EXISTS idx_hc_checked_at     ON health_checks(checked_at);
-    CREATE INDEX IF NOT EXISTS idx_ca_primary        ON channel_alternatives(primary_channel_id);
-    CREATE INDEX IF NOT EXISTS idx_ca_alternative    ON channel_alternatives(alternative_channel_id);
+    CREATE INDEX IF NOT EXISTS idx_channels_source      ON channels(source_id);
+    CREATE INDEX IF NOT EXISTS idx_channels_group       ON channels(group_id);
+    CREATE INDEX IF NOT EXISTS idx_channels_active      ON channels(is_active);
+    CREATE INDEX IF NOT EXISTS idx_channels_health      ON channels(health_status);
+    CREATE INDEX IF NOT EXISTS idx_channels_url         ON channels(url);
+    CREATE INDEX IF NOT EXISTS idx_hc_channel           ON health_checks(channel_id);
+    CREATE INDEX IF NOT EXISTS idx_hc_checked_at        ON health_checks(checked_at);
+    CREATE INDEX IF NOT EXISTS idx_ca_primary           ON channel_alternatives(primary_channel_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_alternative       ON channel_alternatives(alternative_channel_id);
   `);
 
   // Migration: Add priority and auto_priority columns to sources if not exists
@@ -136,6 +137,17 @@ function initSchema() {
   }
   if (!info.some((col) => col.name === 'auto_priority')) {
     db.exec('ALTER TABLE sources ADD COLUMN auto_priority INTEGER DEFAULT 1');
+  }
+
+  // Migration: Add Xtream Codes credential columns to sources if not exists
+  if (!info.some((col) => col.name === 'xtream_host')) {
+    db.exec("ALTER TABLE sources ADD COLUMN xtream_host TEXT DEFAULT ''");
+  }
+  if (!info.some((col) => col.name === 'xtream_user')) {
+    db.exec("ALTER TABLE sources ADD COLUMN xtream_user TEXT DEFAULT ''");
+  }
+  if (!info.some((col) => col.name === 'xtream_pass')) {
+    db.exec("ALTER TABLE sources ADD COLUMN xtream_pass TEXT DEFAULT ''");
   }
 
   // Seed default settings if not present

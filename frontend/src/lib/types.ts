@@ -18,13 +18,16 @@ export interface Source {
   id: number
   name: string
   url: string
-  type: 'url' | 'manual'
+  type: 'url' | 'manual' | 'xtream'
   last_synced_at: string | null
   auto_sync: number
   sync_interval_hours: number
   channel_count: number
   priority: number
   auto_priority: number
+  xtream_host: string
+  xtream_user: string
+  xtream_pass: string
   created_at: string
 }
 
@@ -77,6 +80,40 @@ export interface ChannelFilters {
   health?: HealthStatus | ''
   limit?: number
   page?: number
+  sortBy?: 'name' | 'group' | 'source' | 'status' | 'latency'
+  sortOrder?: 'asc' | 'desc'
+}
+
+// ─── Source Preview ────────────────────────────────────────────────────────────────
+export interface PreviewChannel {
+  name: string
+  url: string
+  groupTitle: string
+  tvgLogo: string
+  isDuplicate: boolean          // already exists in DB (exact URL match)
+  isInternalDuplicate: boolean  // repeated within this same source list
+}
+
+export interface SourcePreviewResponse {
+  channels: PreviewChannel[]
+  groups: string[]
+  total: number
+  dbDuplicateCount: number
+  internalDuplicateCount: number
+}
+
+export type PreviewContext =
+  | { type: 'url';    name: string; url: string; autoSync: number; syncIntervalHours: number; priority: number; autoPriority: number }
+  | { type: 'text';   name: string; text: string }
+  | { type: 'xtream'; name: string; xtreamHost: string; xtreamUser: string; xtreamPass: string; autoSync: number; syncIntervalHours: number; priority: number; autoPriority: number }
+
+export interface ImportResult {
+  ok: boolean
+  sourceId: number
+  imported: number
+  updated: number
+  skipped: number
+  total: number
 }
 
 // ─── Health ──────────────────────────────────────────────────────────────────

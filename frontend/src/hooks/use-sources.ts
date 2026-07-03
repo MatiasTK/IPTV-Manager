@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Source } from '@/lib/types'
+import type { Source, SourcePreviewResponse, ImportResult } from '@/lib/types'
 
 export function useSources() {
   return useQuery({
@@ -53,14 +53,60 @@ export function useSyncSource() {
   })
 }
 
+/** Preview a source without writing to DB. Returns annotated channel list with duplicate flags. */
+export function usePreviewSource() {
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post<SourcePreviewResponse>('/api/sources/preview', data),
+  })
+}
+
+/** Fetch M3U from URL, create source, and import only the selected channels. */
+export function useImportUrl() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: {
+      name: string
+      url: string
+      selectedUrls?: string[]
+      autoSync?: number
+      syncIntervalHours?: number
+      priority?: number
+      autoPriority?: number
+    }) => api.post<ImportResult>('/api/sources/import-url', data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sources'] })
+      qc.invalidateQueries({ queryKey: ['channels'] })
+    },
+  })
+}
+
 export function useImportText() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ text, sourceName }: { text: string; sourceName?: string }) =>
-      api.post<{ ok: boolean; sourceId: number; imported: number; updated: number }>(
-        '/api/sources/import-text',
-        { text, sourceName }
-      ),
+    mutationFn: ({ text, sourceName, selectedUrls }: { text: string; sourceName?: string; selectedUrls?: string[] }) =>
+      api.post<ImportResult>('/api/sources/import-text', { text, sourceName, selectedUrls }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sources'] })
+      qc.invalidateQueries({ queryKey: ['channels'] })
+    },
+  })
+}
+
+export function useImportXtream() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: {
+      name: string
+      xtreamHost: string
+      xtreamUser: string
+      xtreamPass: string
+      selectedUrls?: string[]
+      autoSync?: number
+      syncIntervalHours?: number
+      priority?: number
+      autoPriority?: number
+    }) => api.post<ImportResult>('/api/sources/import-xtream', data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sources'] })
       qc.invalidateQueries({ queryKey: ['channels'] })

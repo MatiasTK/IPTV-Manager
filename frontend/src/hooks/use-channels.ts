@@ -8,18 +8,44 @@ function buildChannelsUrl(filters: ChannelFilters = {}) {
   if (filters.groupId) params.set('groupId', String(filters.groupId))
   if (filters.sourceId) params.set('sourceId', String(filters.sourceId))
   if (filters.health) params.set('health', filters.health)
-  params.set('limit', String(filters.limit ?? 500))
+  if (filters.sortBy) params.set('sortBy', filters.sortBy)
+  if (filters.sortOrder) params.set('sortOrder', filters.sortOrder)
+  params.set('limit', String(filters.limit ?? 100))
   if (filters.page) params.set('page', String(filters.page))
   return `/api/channels?${params}`
+}
+
+function buildIdsUrl(filters: Omit<ChannelFilters, 'limit' | 'page' | 'sortBy' | 'sortOrder'> = {}) {
+  const params = new URLSearchParams()
+  if (filters.search) params.set('search', filters.search)
+  if (filters.groupId) params.set('groupId', String(filters.groupId))
+  if (filters.sourceId) params.set('sourceId', String(filters.sourceId))
+  if (filters.health) params.set('health', filters.health)
+  return `/api/channels/ids?${params}`
 }
 
 export function useChannels(filters: ChannelFilters = {}) {
   return useQuery({
     queryKey: ['channels', filters],
-    queryFn: () => api.get<{ channels: Channel[]; total: number }>(buildChannelsUrl(filters)),
+    queryFn: () => api.get<{ channels: Channel[]; total: number; page: number; limit: number }>(buildChannelsUrl(filters)),
     staleTime: 30_000,
+    placeholderData: (prev) => prev,
   })
 }
+
+/** Fetches only IDs matching filters (no pagination) – for cross-page "select all". */
+export function useChannelIds(
+  filters: Omit<ChannelFilters, 'limit' | 'page' | 'sortBy' | 'sortOrder'>,
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: ['channel-ids', filters],
+    queryFn: () => api.get<{ ids: number[]; total: number }>(buildIdsUrl(filters)),
+    enabled,
+    staleTime: 10_000,
+  })
+}
+
 
 export function useChannel(id: number | null) {
   return useQuery({
