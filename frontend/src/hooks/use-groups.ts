@@ -67,3 +67,14 @@ export function useApplyAutoSuggest() {
     },
   })
 }
+
+export function useDeleteEmptyGroups() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<{ ok: boolean; deletedCount: number }>('/api/groups/delete-empty'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['groups'] })
+      qc.invalidateQueries({ queryKey: ['channels'] })
+    },
+  })
+}

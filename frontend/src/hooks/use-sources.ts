@@ -30,7 +30,8 @@ export function useUpdateSource() {
 export function useDeleteSource() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => api.delete(`/api/sources/${id}?deleteChannels=false`),
+    mutationFn: ({ id, deleteChannels }: { id: number; deleteChannels: boolean }) =>
+      api.delete(`/api/sources/${id}?deleteChannels=${deleteChannels}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sources'] })
       qc.invalidateQueries({ queryKey: ['channels'] })

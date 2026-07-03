@@ -134,3 +134,14 @@ export function useBulkEditChannelsGroup() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['channels'] }),
   })
 }
+
+export function useDeleteDownChannels() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<{ ok: boolean; deletedCount: number }>('/api/channels/delete-down'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['channels'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
+    },
+  })
+}

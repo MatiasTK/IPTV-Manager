@@ -33,17 +33,21 @@ const getPrimaryChannelsStmt = db.prepare(`
     c.catchup, c.catchup_source, c.catchup_days,
     c.http_user_agent, c.referrer,
     c.health_status, c.is_active,
-    g.name AS group_name, c.sort_order
+    g.name AS group_name, c.sort_order,
+    COALESCE(s.priority, 9999) AS source_priority
   FROM channels c
   LEFT JOIN groups g ON c.group_id = g.id
+  LEFT JOIN sources s ON c.source_id = s.id
   WHERE c.is_active = 1
     AND c.id NOT IN (
       SELECT alternative_channel_id FROM channel_alternatives
     )
   ORDER BY
     COALESCE((SELECT sort_order FROM groups WHERE id = c.group_id), 9999),
-    c.sort_order,
-    c.name
+    get_base_name(c.name),
+    COALESCE(s.priority, 9999),
+    c.name COLLATE NOCASE,
+    c.sort_order
 `);
 
 // All active alternatives for a given primary, ordered by health then priority
@@ -51,9 +55,11 @@ const getAlternativesStmt = db.prepare(`
   SELECT
     c.id, c.url, c.name, c.health_status,
     c.http_user_agent, c.referrer,
-    ca.priority
+    ca.priority,
+    COALESCE(s.priority, 9999) AS source_priority
   FROM channel_alternatives ca
   JOIN channels c ON ca.alternative_channel_id = c.id
+  LEFT JOIN sources s ON c.source_id = s.id
   WHERE ca.primary_channel_id = ?
     AND c.is_active = 1
   ORDER BY
@@ -108,6 +114,7 @@ function generateM3U() {
       health: ch.health_status,
       httpUserAgent: ch.http_user_agent || '',
       referrer: ch.referrer || '',
+      sourcePriority: ch.source_priority,
     };
 
     const altStreams = alternatives.map((alt) => ({
@@ -115,15 +122,15 @@ function generateM3U() {
       health: alt.health_status,
       httpUserAgent: alt.http_user_agent || ch.http_user_agent || '',
       referrer: alt.referrer || ch.referrer || '',
+      sourcePriority: alt.source_priority,
     }));
 
-    // Sort all streams: best health first.
-    // Primary and alternatives compete equally — if primary is down but an
-    // alternative is healthy, the healthy one goes first in the M3U so
-    // TiviMate starts with the working stream.
-    const allStreams = [primaryStream, ...altStreams].sort(
-      (a, b) => (HEALTH_ORDER[a.health] ?? 2) - (HEALTH_ORDER[b.health] ?? 2)
-    );
+    // Sort: Health first (healthy -> degraded -> unknown -> down), then Source Priority (lower number is higher priority)
+    const allStreams = [primaryStream, ...altStreams].sort((a, b) => {
+      const healthDiff = (HEALTH_ORDER[a.health] ?? 2) - (HEALTH_ORDER[b.health] ?? 2);
+      if (healthDiff !== 0) return healthDiff;
+      return a.sourcePriority - b.sourcePriority;
+    });
 
     // Shared tvg-id for TiviMate grouping. Without a common tvg-id TiviMate
     // treats each entry as a separate channel, defeating the purpose.

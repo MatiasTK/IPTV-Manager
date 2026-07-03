@@ -17,7 +17,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   useGroups, useCreateGroup, useUpdateGroup, useDeleteGroup, useReorderGroups,
-  useAutoSuggestGroups, useApplyAutoSuggest
+  useAutoSuggestGroups, useApplyAutoSuggest, useDeleteEmptyGroups
 } from '@/hooks/use-groups'
 import type { Group } from '@/lib/types'
 import { toast } from 'sonner'
@@ -28,10 +28,12 @@ export default function GroupsPage() {
   const updateGroup = useUpdateGroup()
   const deleteGroup = useDeleteGroup()
   const reorderGroups = useReorderGroups()
+  const deleteEmptyGroups = useDeleteEmptyGroups()
 
   const [formOpen, setFormOpen] = useState(false)
   const [editGroup, setEditGroup] = useState<Group | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Group | null>(null)
+  const [deleteEmptyConfirmOpen, setDeleteEmptyConfirmOpen] = useState(false)
   const [name, setName] = useState('')
 
   // Auto-suggest states
@@ -40,6 +42,9 @@ export default function GroupsPage() {
 
   const { data: suggestData, isLoading: suggestLoading } = useAutoSuggestGroups(suggestOpen)
   const applySuggest = useApplyAutoSuggest()
+
+  const groups = data?.groups ?? []
+  const emptyGroupsCount = groups.filter((g) => g.channel_count === 0).length
 
   useEffect(() => {
     if (suggestData?.suggestions) {
@@ -50,8 +55,6 @@ export default function GroupsPage() {
       setSelectedSuggestGroups(initial)
     }
   }, [suggestData])
-
-  const groups = data?.groups ?? []
 
   const handleOpenCreate = () => {
     setEditGroup(null)
@@ -93,23 +96,29 @@ export default function GroupsPage() {
     }
   }
 
-  const handleReorder = async (fromIdx: number, direction: 'up' | 'down') => {
-    const toIdx = direction === 'up' ? fromIdx - 1 : fromIdx + 1
-    if (toIdx < 0 || toIdx >= groups.length) return
+  const handleReorder = async (index: number, direction: 'up' | 'down') => {
+    const newGroups = [...groups]
+    const targetIdx = direction === 'up' ? index - 1 : index + 1
+    const temp = newGroups[index]
+    newGroups[index] = newGroups[targetIdx]
+    newGroups[targetIdx] = temp
 
-    const reordered = [...groups]
-    const a = reordered[fromIdx]
-    const b = reordered[toIdx]
-
-    const order = [
-      { id: a.id, sort_order: b.sort_order },
-      { id: b.id, sort_order: a.sort_order },
-    ]
-
+    const order = newGroups.map((g, idx) => ({ id: g.id, sort_order: idx + 1 }))
     try {
       await reorderGroups.mutateAsync(order)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al reordenar')
+    }
+  }
+
+  const handleDeleteEmpty = async () => {
+    try {
+      const res = await deleteEmptyGroups.mutateAsync()
+      toast.success(`Se eliminaron ${res.deletedCount} grupos vacíos`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al eliminar grupos')
+    } finally {
+      setDeleteEmptyConfirmOpen(false)
     }
   }
 
@@ -121,6 +130,16 @@ export default function GroupsPage() {
         icon={FolderOpen}
         actions={
           <div className="flex gap-2">
+            {emptyGroupsCount > 0 && (
+              <Button
+                variant="destructive"
+                onClick={() => setDeleteEmptyConfirmOpen(true)}
+                disabled={deleteEmptyGroups.isPending}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Eliminar vacíos ({emptyGroupsCount})
+              </Button>
+            )}
             <Button variant="outline" onClick={() => setSuggestOpen(true)}>
               <Sparkles className="w-4 h-4 mr-2" />
               Autogrupar canales
@@ -352,6 +371,16 @@ export default function GroupsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={deleteEmptyConfirmOpen}
+        onOpenChange={setDeleteEmptyConfirmOpen}
+        title="Eliminar grupos vacíos"
+        description={`¿Estás seguro de que deseas eliminar los ${emptyGroupsCount} grupos que no contienen ningún canal? Esta acción no afectará a tus canales existentes.`}
+        confirmLabel="Eliminar grupos"
+        onConfirm={handleDeleteEmpty}
+        variant="destructive"
+      />
     </div>
   )
 }

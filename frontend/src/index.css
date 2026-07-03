@@ -66,6 +66,17 @@
   border-color: hsl(var(--border));
 }
 
+button,
+a,
+select,
+label,
+[role="button"],
+[role="checkbox"],
+[role="switch"],
+.cursor-pointer {
+  cursor: pointer !important;
+}
+
 body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));

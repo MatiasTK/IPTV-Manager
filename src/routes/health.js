@@ -3,7 +3,7 @@
 const express = require('express');
 const db = require('../db/database');
 const { authMiddleware, csrfMiddleware } = require('../middleware/auth');
-const { runHealthCheck, checkSingleChannel, autoSwitchLog } = require('../services/health-checker');
+const { runHealthCheck, checkSingleChannel, isCheckRunning, autoSwitchLog } = require('../services/health-checker');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -18,14 +18,14 @@ router.get('/status', (req, res) => {
     GROUP BY health_status
   `).all();
 
-  const summary = { healthy: 0, degraded: 0, down: 0, unknown: 0, total: 0 };
+  const summary = { healthy: 0, degraded: 0, intermittent: 0, down: 0, unknown: 0, total: 0 };
   for (const row of counts) {
     const key = row.health_status || 'unknown';
     summary[key] = (summary[key] || 0) + row.count;
     summary.total += row.count;
   }
 
-  res.json({ summary, autoSwitchLog: autoSwitchLog.slice(0, 20) });
+  res.json({ summary, autoSwitchLog: autoSwitchLog.slice(0, 20), isChecking: isCheckRunning() });
 });
 
 // ── GET /api/health/channels ───────────────────────────────────────────────────
@@ -40,10 +40,11 @@ router.get('/channels', (req, res) => {
     WHERE c.is_active = 1
     ORDER BY
       CASE c.health_status
-        WHEN 'down'     THEN 0
-        WHEN 'degraded' THEN 1
-        WHEN 'unknown'  THEN 2
-        WHEN 'healthy'  THEN 3
+        WHEN 'down'         THEN 0
+        WHEN 'intermittent' THEN 1
+        WHEN 'degraded'     THEN 2
+        WHEN 'unknown'      THEN 3
+        WHEN 'healthy'      THEN 4
       END,
       c.health_latency_ms DESC
   `).all();

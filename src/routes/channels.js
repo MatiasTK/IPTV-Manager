@@ -1,6 +1,9 @@
 'use strict';
 
 const express = require('express');
+const https = require('https');
+const http = require('http');
+const { URL } = require('url');
 const db = require('../db/database');
 const { authMiddleware, csrfMiddleware } = require('../middleware/auth');
 const { detectDuplicates } = require('../services/duplicate-detector');
@@ -8,6 +11,54 @@ const { detectDuplicates } = require('../services/duplicate-detector');
 const router = express.Router();
 router.use(authMiddleware);
 router.use(csrfMiddleware);
+
+// ── GET /api/channels/logo-proxy ────────────────────────────────────────────────
+router.get('/logo-proxy', (req, res) => {
+  const logoUrl = req.query.url;
+  if (!logoUrl) return res.status(400).send('url required');
+
+  try {
+    const parsedUrl = new URL(logoUrl);
+    const client = parsedUrl.protocol === 'https:' ? https : http;
+
+    const options = {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      }
+    };
+
+    const proxyReq = client.get(parsedUrl, options, (proxyRes) => {
+      if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
+        try {
+          const redirectUrl = new URL(proxyRes.headers.location, logoUrl);
+          const redirectReq = client.get(redirectUrl, options, (redRes) => {
+            res.writeHead(redRes.statusCode, {
+              'Content-Type': redRes.headers['content-type'] || 'image/png',
+              'Cache-Control': 'public, max-age=86400',
+            });
+            redRes.pipe(res);
+          });
+          redirectReq.on('error', () => res.status(500).send('Error fetching logo redirect'));
+          return;
+        } catch {
+          // fall through
+        }
+      }
+
+      res.writeHead(proxyRes.statusCode, {
+        'Content-Type': proxyRes.headers['content-type'] || 'image/png',
+        'Cache-Control': 'public, max-age=86400',
+      });
+      proxyRes.pipe(res);
+    });
+
+    proxyReq.on('error', () => {
+      res.status(500).send('Error fetching logo');
+    });
+  } catch (err) {
+    res.status(400).send('Invalid URL');
+  }
+});
 
 // ── GET /api/channels ──────────────────────────────────────────────────────────
 router.get('/', (req, res) => {
@@ -39,7 +90,7 @@ router.get('/', (req, res) => {
     params.push(pat, pat, pat);
   }
 
-  query += ' ORDER BY COALESCE((SELECT sort_order FROM groups WHERE id = c.group_id), 9999), c.sort_order, c.name';
+  query += ' ORDER BY COALESCE((SELECT sort_order FROM groups WHERE id = c.group_id), 9999), get_base_name(c.name), COALESCE(s.priority, 9999), c.name COLLATE NOCASE, c.sort_order';
 
   const pageNum = Math.max(1, parseInt(page, 10));
   const limitNum = Math.min(500, Math.max(1, parseInt(limit, 10)));
@@ -274,6 +325,12 @@ router.post('/bulk-alternatives', (req, res) => {
 
   merge();
   res.status(201).json({ ok: true });
+});
+
+// ── POST /api/channels/delete-down ───────────────────────────────────────────
+router.post('/delete-down', (req, res) => {
+  const result = db.prepare("DELETE FROM channels WHERE health_status = 'down' AND is_active = 1").run();
+  res.json({ ok: true, deletedCount: result.changes });
 });
 
 // ── POST /api/channels/bulk-delete ───────────────────────────────────────────

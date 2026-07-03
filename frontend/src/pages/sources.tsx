@@ -31,12 +31,15 @@ export default function SourcesPage() {
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [editSource, setEditSource] = useState<Source | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Source | null>(null)
+  const [deleteChannels, setDeleteChannels] = useState(false)
 
   // URL form state
   const [srcName, setSrcName] = useState('')
   const [srcUrl, setSrcUrl] = useState('')
   const [srcAutoSync, setSrcAutoSync] = useState(false)
   const [srcInterval, setSrcInterval] = useState('24')
+  const [srcPriority, setSrcPriority] = useState('1')
+  const [srcAutoPriority, setSrcAutoPriority] = useState(true)
 
   // Import text state
   const [importName, setImportName] = useState('Import Manual')
@@ -50,6 +53,8 @@ export default function SourcesPage() {
     setSrcUrl('')
     setSrcAutoSync(false)
     setSrcInterval('24')
+    setSrcPriority('1')
+    setSrcAutoPriority(true)
     setUrlDialogOpen(true)
   }
 
@@ -59,6 +64,8 @@ export default function SourcesPage() {
     setSrcUrl(s.url)
     setSrcAutoSync(!!s.auto_sync)
     setSrcInterval(String(s.sync_interval_hours))
+    setSrcPriority(String(s.priority ?? 1))
+    setSrcAutoPriority(s.auto_priority === 1)
     setUrlDialogOpen(true)
   }
 
@@ -70,6 +77,8 @@ export default function SourcesPage() {
       type: srcUrl.trim() ? 'url' : 'manual',
       autoSync: srcAutoSync ? 1 : 0,
       syncIntervalHours: Number(srcInterval) || 24,
+      priority: Number(srcPriority) || 1,
+      autoPriority: srcAutoPriority ? 1 : 0,
     }
     try {
       if (editSource) {
@@ -97,12 +106,13 @@ export default function SourcesPage() {
   const handleDelete = async () => {
     if (!deleteTarget) return
     try {
-      await deleteSource.mutateAsync(deleteTarget.id)
+      await deleteSource.mutateAsync({ id: deleteTarget.id, deleteChannels })
       toast.success('Fuente eliminada')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al eliminar')
     } finally {
       setDeleteTarget(null)
+      setDeleteChannels(false)
     }
   }
 
@@ -179,11 +189,16 @@ export default function SourcesPage() {
                     {source.channel_count} canales
                   </Badge>
                 </div>
-                {source.auto_sync === 1 && (
-                  <p className="text-xs text-muted-foreground">
-                    Auto-sync cada {source.sync_interval_hours}h
-                  </p>
-                )}
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <Badge variant="outline" className="text-xs">
+                    Prioridad: {source.priority} {source.auto_priority === 1 ? '(Auto)' : '(Manual)'}
+                  </Badge>
+                  {source.auto_sync === 1 && (
+                    <span className="text-muted-foreground">
+                      Auto-sync cada {source.sync_interval_hours}h
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 pt-1">
                   {source.type === 'url' && (
                     <Button
@@ -250,6 +265,22 @@ export default function SourcesPage() {
                 />
               </div>
             )}
+            <div className="flex items-center justify-between">
+              <Label htmlFor="src-autopriority">Prioridad automática</Label>
+              <Switch id="src-autopriority" checked={srcAutoPriority} onCheckedChange={setSrcAutoPriority} />
+            </div>
+            {!srcAutoPriority && (
+              <div className="space-y-1.5">
+                <Label htmlFor="src-priority">Prioridad (1 = Mayor prioridad)</Label>
+                <Input
+                  id="src-priority"
+                  type="number"
+                  min="1"
+                  value={srcPriority}
+                  onChange={(e) => setSrcPriority(e.target.value)}
+                />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setUrlDialogOpen(false)}>Cancelar</Button>
@@ -295,14 +326,47 @@ export default function SourcesPage() {
         </DialogContent>
       </Dialog>
 
-      <ConfirmDialog
-        open={!!deleteTarget}
-        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
-        title="Eliminar fuente"
-        description={`¿Eliminar "${deleteTarget?.name}"? Los canales importados no serán eliminados.`}
-        confirmLabel="Eliminar"
-        onConfirm={handleDelete}
-      />
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteChannels(false); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Eliminar fuente</DialogTitle>
+            <DialogDescription>
+              ¿Estás seguro de que deseas eliminar la fuente "{deleteTarget?.name}"?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <div className="flex items-center space-x-3 bg-muted/50 p-3 rounded-lg border border-border">
+              <Switch
+                id="delete-channels-toggle"
+                checked={deleteChannels}
+                onCheckedChange={setDeleteChannels}
+              />
+              <div className="space-y-0.5">
+                <Label htmlFor="delete-channels-toggle" className="text-sm font-medium cursor-pointer">
+                  Eliminar canales importados
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Borra todos los canales asociados a esta lista
+                </p>
+              </div>
+            </div>
+            {!deleteChannels && (
+              <p className="text-xs text-muted-foreground mt-2 px-1">
+                Nota: Si no los eliminas, los canales se conservarán como canales manuales.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDeleteTarget(null); setDeleteChannels(false); }}>
+              Cancelar
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleteSource.isPending}>
+              {deleteSource.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Eliminar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

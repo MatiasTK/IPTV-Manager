@@ -6,8 +6,10 @@ export function useHealthStatus() {
   return useQuery({
     queryKey: ['health', 'status'],
     queryFn: () => api.get<HealthStatusResponse>('/api/health/status'),
-    staleTime: 15_000,
-    refetchInterval: 30_000,
+    staleTime: 0,
+    refetchInterval: (query) => {
+      return query.state.data?.isChecking ? 1500 : 30000
+    },
   })
 }
 

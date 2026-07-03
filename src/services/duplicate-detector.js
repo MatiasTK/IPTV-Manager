@@ -182,7 +182,7 @@ function detectDuplicates(channels, threshold = 80) {
  * Map health_status to a numeric score for comparison.
  */
 function healthScore(status) {
-  const map = { healthy: 3, degraded: 2, unknown: 1, down: 0 };
+  const map = { healthy: 4, degraded: 3, intermittent: 2, unknown: 1, down: 0 };
   return map[status] ?? 1;
 }
 

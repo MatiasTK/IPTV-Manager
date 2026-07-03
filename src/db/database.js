@@ -12,6 +12,17 @@ if (!fs.existsSync(config.dataDir)) {
 
 const db = new Database(config.dbPath);
 
+// Register custom SQL function to extract clean base name for grouping/sorting
+db.function('get_base_name', (name) => {
+  if (!name) return '';
+  let base = name.toLowerCase();
+  base = base.replace(/\s*\(.*?\)/g, ''); // Remove parentheses like (Opción 1)
+  base = base.replace(/\b(hd|sd|fhd|4k)\b/g, ''); // Remove resolution tags
+  base = base.replace(/\d+/g, ''); // Remove numbers to group Fox Sports 2, etc.
+  base = base.trim().replace(/\s+/g, ' '); // Clean spaces
+  return base;
+});
+
 // Enable WAL mode for better concurrent read performance
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
@@ -117,6 +128,15 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_ca_primary        ON channel_alternatives(primary_channel_id);
     CREATE INDEX IF NOT EXISTS idx_ca_alternative    ON channel_alternatives(alternative_channel_id);
   `);
+
+  // Migration: Add priority and auto_priority columns to sources if not exists
+  const info = db.pragma("table_info(sources)");
+  if (!info.some((col) => col.name === 'priority')) {
+    db.exec('ALTER TABLE sources ADD COLUMN priority INTEGER DEFAULT 1');
+  }
+  if (!info.some((col) => col.name === 'auto_priority')) {
+    db.exec('ALTER TABLE sources ADD COLUMN auto_priority INTEGER DEFAULT 1');
+  }
 
   // Seed default settings if not present
   const defaults = [

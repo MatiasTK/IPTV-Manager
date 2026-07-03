@@ -8,6 +8,7 @@ const db = require('../db/database');
 const { authMiddleware, csrfMiddleware } = require('../middleware/auth');
 const { parseM3U } = require('../services/m3u-parser');
 const { detectDuplicates } = require('../services/duplicate-detector');
+const { recalculateSourcePriorities } = require('../services/health-checker');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -23,7 +24,7 @@ router.get('/', (req, res) => {
 
 // ── POST /api/sources ──────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { name, url, type = 'url', autoSync = 0, syncIntervalHours = 24 } = req.body;
+  const { name, url, type = 'url', autoSync = 0, syncIntervalHours = 24, priority = 1, autoPriority = 1 } = req.body;
 
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return res.status(400).json({ error: 'name required.' });
@@ -39,15 +40,20 @@ router.post('/', async (req, res) => {
   }
 
   const result = db.prepare(`
-    INSERT INTO sources (name, url, type, auto_sync, sync_interval_hours)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO sources (name, url, type, auto_sync, sync_interval_hours, priority, auto_priority)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim().slice(0, 255),
     (url || '').trim().slice(0, 2048),
     type,
     autoSync ? 1 : 0,
-    Math.max(1, parseInt(syncIntervalHours || '24', 10))
+    Math.max(1, parseInt(syncIntervalHours || '24', 10)),
+    Number(priority) || 1,
+    autoPriority ? 1 : 0
   );
+
+  // Recalculate priorities in case autoPriority is enabled
+  recalculateSourcePriorities();
 
   const source = db.prepare('SELECT * FROM sources WHERE id = ?').get(result.lastInsertRowid);
   res.status(201).json(source);
@@ -59,20 +65,27 @@ router.put('/:id', (req, res) => {
   const source = db.prepare('SELECT id FROM sources WHERE id = ?').get(id);
   if (!source) return res.status(404).json({ error: 'Source not found.' });
 
-  const { name, url, autoSync, syncIntervalHours } = req.body;
+  const { name, url, autoSync, syncIntervalHours, priority, autoPriority } = req.body;
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return res.status(400).json({ error: 'name required.' });
   }
 
   db.prepare(`
-    UPDATE sources SET name = ?, url = ?, auto_sync = ?, sync_interval_hours = ? WHERE id = ?
+    UPDATE sources
+    SET name = ?, url = ?, auto_sync = ?, sync_interval_hours = ?, priority = ?, auto_priority = ?
+    WHERE id = ?
   `).run(
     name.trim().slice(0, 255),
     (url || '').trim().slice(0, 2048),
     autoSync ? 1 : 0,
     Math.max(1, parseInt(syncIntervalHours || '24', 10)),
+    Number(priority) || 1,
+    autoPriority ? 1 : 0,
     id
   );
+
+  // Recalculate priorities after updating a source's priority settings
+  recalculateSourcePriorities();
 
   res.json(db.prepare('SELECT * FROM sources WHERE id = ?').get(id));
 });
@@ -129,6 +142,9 @@ router.post('/:id/sync', async (req, res) => {
   );
   const duplicateGroups = detectDuplicates(allChannels, threshold);
 
+  // Recalculate priorities since channel counts / states might have changed
+  recalculateSourcePriorities();
+
   res.json({
     ok: true,
     imported: imported.created,
@@ -159,6 +175,9 @@ router.post('/import-text', (req, res) => {
   const imported = importChannels(parsed, sourceId);
 
   db.prepare('UPDATE sources SET channel_count = ? WHERE id = ?').run(imported.total, sourceId);
+
+  // Recalculate priorities since channels were added
+  recalculateSourcePriorities();
 
   res.json({
     ok: true,

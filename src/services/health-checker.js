@@ -45,10 +45,11 @@ const getAlternativesStmt = db.prepare(`
     AND c.is_active = 1
   ORDER BY
     CASE c.health_status
-      WHEN 'healthy'  THEN 0
-      WHEN 'degraded' THEN 1
-      WHEN 'unknown'  THEN 2
-      WHEN 'down'     THEN 3
+      WHEN 'healthy'      THEN 0
+      WHEN 'degraded'     THEN 1
+      WHEN 'intermittent' THEN 2
+      WHEN 'unknown'      THEN 3
+      WHEN 'down'         THEN 4
     END,
     ca.priority
 `);
@@ -90,14 +91,11 @@ function checkUrl(urlStr, timeoutMs, httpUserAgent = '', referrer = '', method =
 
     const options = {
       method: method,
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port || (isHttps ? 443 : 80),
-      path: parsedUrl.pathname + parsedUrl.search,
       headers: headers,
       timeout: timeoutMs,
     };
 
-    const req = transport.request(options, (res) => {
+    const req = transport.request(parsedUrl, options, (res) => {
       const latencyMs = Date.now() - start;
 
       // Handle redirect
@@ -167,6 +165,26 @@ function checkUrl(urlStr, timeoutMs, httpUserAgent = '', referrer = '', method =
 }
 
 /**
+ * Make a request with automatic retries on failure (sequential, only if down).
+ */
+async function checkUrlWithRetries(urlStr, timeoutMs, httpUserAgent = '', referrer = '', method = 'HEAD') {
+  let attempt = 0;
+  const maxAttempts = 3;
+  let lastResult;
+  while (attempt < maxAttempts) {
+    attempt++;
+    lastResult = await checkUrl(urlStr, timeoutMs, httpUserAgent, referrer, method);
+    if (lastResult.status === 'healthy' || lastResult.status === 'degraded') {
+      return lastResult; // Success! No need to retry.
+    }
+    if (attempt < maxAttempts) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  return lastResult;
+}
+
+/**
  * Run health check for a batch of channels with concurrency limit.
  */
 async function checkChannels(channels, timeoutMs, concurrency) {
@@ -176,7 +194,7 @@ async function checkChannels(channels, timeoutMs, concurrency) {
   async function worker() {
     while (idx < channels.length) {
       const ch = channels[idx++];
-      const result = await checkUrl(ch.url, timeoutMs, ch.http_user_agent, ch.referrer);
+      const result = await checkUrlWithRetries(ch.url, timeoutMs, ch.http_user_agent, ch.referrer);
       results.push({ channel: ch, result });
     }
   }
@@ -195,7 +213,7 @@ async function checkChannels(channels, timeoutMs, concurrency) {
  */
 function handleAutoSwitch(channel) {
   const alternatives = getAlternativesStmt.all(channel.id);
-  const bestAlt = alternatives.find((a) => a.health_status === 'healthy' || a.health_status === 'degraded');
+  const bestAlt = alternatives.find((a) => a.health_status === 'healthy' || a.health_status === 'degraded' || a.health_status === 'intermittent');
 
   if (bestAlt) {
     const event = {
@@ -215,12 +233,26 @@ function handleAutoSwitch(channel) {
   }
 }
 
+let isChecking = false;
+
+function isCheckRunning() {
+  return isChecking;
+}
+
 /**
  * Run a full health check cycle.
  */
 async function runHealthCheck() {
   const enabledSetting = db.prepare("SELECT value FROM settings WHERE key = 'health_check_enabled'").get();
   if (enabledSetting && enabledSetting.value === '0') return;
+
+  if (isChecking) {
+    console.log('[HealthChecker] Health check is already running. Skipping.');
+    return;
+  }
+
+  isChecking = true;
+  try {
 
   const channels = getActiveChannelsStmt.all();
   if (channels.length === 0) return;
@@ -237,7 +269,24 @@ async function runHealthCheck() {
     for (const { channel, result } of items) {
       const prevStatus = channel.health_status;
 
-      updateChannelHealthStmt.run(result.status, result.latencyMs, channel.id);
+      // Calculate health status combining current result with recent history (last 4 checks)
+      const history = db.prepare(`
+        SELECT status FROM health_checks
+        WHERE channel_id = ?
+        ORDER BY checked_at DESC
+        LIMIT 4
+      `).all(channel.id).map(r => r.status);
+
+      const allStatuses = [result.status, ...history];
+      const hasSuccess = allStatuses.some(s => s === 'healthy' || s === 'degraded');
+      const hasFailure = allStatuses.some(s => s === 'down');
+
+      let finalStatus = result.status;
+      if (hasSuccess && hasFailure) {
+        finalStatus = 'intermittent';
+      }
+
+      updateChannelHealthStmt.run(finalStatus, result.latencyMs, channel.id);
       insertHealthCheckStmt.run(
         channel.id,
         result.status,
@@ -247,7 +296,7 @@ async function runHealthCheck() {
       );
 
       // Auto-switch if newly went down
-      if (prevStatus !== 'down' && result.status === 'down') {
+      if (prevStatus !== 'down' && finalStatus === 'down') {
         handleAutoSwitch(channel);
       }
     }
@@ -261,7 +310,14 @@ async function runHealthCheck() {
   const healthy = results.filter((r) => r.result.status === 'healthy').length;
   const degraded = results.filter((r) => r.result.status === 'degraded').length;
   const down = results.filter((r) => r.result.status === 'down').length;
+
+  // Recalculate source priorities automatically
+  recalculateSourcePriorities();
+
   console.log(`[HealthChecker] Done. ✅ ${healthy} healthy, ⚠️ ${degraded} degraded, ❌ ${down} down`);
+  } finally {
+    isChecking = false;
+  }
 }
 
 /**
@@ -271,17 +327,112 @@ async function checkSingleChannel(channelId) {
   const channel = db.prepare('SELECT id, url, name, health_status, http_user_agent, referrer FROM channels WHERE id = ?').get(channelId);
   if (!channel) return null;
 
-  const result = await checkUrl(channel.url, config.healthCheck.timeoutMs, channel.http_user_agent, channel.referrer);
+  const result = await checkUrlWithRetries(channel.url, config.healthCheck.timeoutMs, channel.http_user_agent, channel.referrer);
 
   const prevStatus = channel.health_status;
-  updateChannelHealthStmt.run(result.status, result.latencyMs, channel.id);
+
+  // Calculate health status combining current result with recent history
+  const history = db.prepare(`
+    SELECT status FROM health_checks
+    WHERE channel_id = ?
+    ORDER BY checked_at DESC
+    LIMIT 4
+  `).all(channel.id).map(r => r.status);
+
+  const allStatuses = [result.status, ...history];
+  const hasSuccess = allStatuses.some(s => s === 'healthy' || s === 'degraded');
+  const hasFailure = allStatuses.some(s => s === 'down');
+
+  let finalStatus = result.status;
+  if (hasSuccess && hasFailure) {
+    finalStatus = 'intermittent';
+  }
+
+  updateChannelHealthStmt.run(finalStatus, result.latencyMs, channel.id);
   insertHealthCheckStmt.run(channel.id, result.status, result.latencyMs, result.httpStatus, result.error);
 
-  if (prevStatus !== 'down' && result.status === 'down') {
+  if (prevStatus !== 'down' && finalStatus === 'down') {
     handleAutoSwitch(channel);
   }
 
   return { channel, result };
+}
+
+/**
+ * Recalculate priorities of all sources based on average channel health and latency.
+ * Normalizes based on total channel count so list size does not affect priority.
+ */
+function recalculateSourcePriorities() {
+  try {
+    const sources = db.prepare('SELECT id, priority, auto_priority FROM sources').all();
+    if (sources.length === 0) return;
+
+    const sourcesWithScore = sources.map((s) => {
+      const channels = db.prepare('SELECT health_status, health_latency_ms FROM channels WHERE source_id = ? AND is_active = 1').all(s.id);
+      if (channels.length === 0) {
+        return { id: s.id, priority: s.priority, auto: s.auto_priority, score: 0 };
+      }
+
+      let totalHealth = 0;
+      let totalLatency = 0;
+      const hMap = { healthy: 4, degraded: 3, intermittent: 2, unknown: 1, down: 0 };
+
+      for (const ch of channels) {
+        totalHealth += hMap[ch.health_status] ?? 1;
+        totalLatency += ch.health_latency_ms || 0;
+      }
+
+      const avgHealth = totalHealth / channels.length;
+      const avgLatency = totalLatency / channels.length;
+      // Health is 0-3. Scaling by 1000 makes health status the dominant factor,
+      // and average latency decides ties.
+      const score = avgHealth * 1000 - avgLatency;
+
+      return { id: s.id, priority: s.priority, auto: s.auto_priority, score };
+    });
+
+    const manual = sourcesWithScore.filter((s) => s.auto === 0).sort((a, b) => a.priority - b.priority);
+    const auto = sourcesWithScore.filter((s) => s.auto === 1).sort((a, b) => b.score - a.score);
+
+    const finalOrder = [];
+    
+    // First, place manual sources at their priority index
+    for (const m of manual) {
+      const idx = m.priority - 1;
+      if (idx >= 0 && idx < sources.length && !finalOrder[idx]) {
+        finalOrder[idx] = m;
+      } else {
+        finalOrder.push(m);
+      }
+    }
+
+    // Fill remaining empty slots with auto-calculated sources
+    let autoIdx = 0;
+    for (let i = 0; i < sources.length; i++) {
+      if (!finalOrder[i]) {
+        if (autoIdx < auto.length) {
+          finalOrder[i] = auto[autoIdx++];
+        }
+      }
+    }
+
+    while (autoIdx < auto.length) {
+      finalOrder.push(auto[autoIdx++]);
+    }
+
+    // Update the database (1-indexed based on their index in the final order)
+    const updateStmt = db.prepare('UPDATE sources SET priority = ? WHERE id = ?');
+    
+    db.transaction(() => {
+      finalOrder.forEach((s, index) => {
+        if (s) {
+          updateStmt.run(index + 1, s.id);
+        }
+      });
+    })();
+  } catch (err) {
+    console.error('[HealthChecker] Failed to recalculate source priorities:', err);
+  }
 }
 
 /**
@@ -304,4 +455,4 @@ function startHealthChecker() {
   };
 }
 
-module.exports = { startHealthChecker, runHealthCheck, checkSingleChannel, autoSwitchLog };
+module.exports = { startHealthChecker, runHealthCheck, checkSingleChannel, recalculateSourcePriorities, isCheckRunning, autoSwitchLog };

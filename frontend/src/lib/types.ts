@@ -23,11 +23,13 @@ export interface Source {
   auto_sync: number
   sync_interval_hours: number
   channel_count: number
+  priority: number
+  auto_priority: number
   created_at: string
 }
 
 // ─── Channels ────────────────────────────────────────────────────────────────
-export type HealthStatus = 'healthy' | 'degraded' | 'down' | 'unknown'
+export type HealthStatus = 'healthy' | 'degraded' | 'down' | 'unknown' | 'intermittent'
 
 export interface Channel {
   id: number
@@ -81,6 +83,7 @@ export interface ChannelFilters {
 export interface HealthSummary {
   healthy: number
   degraded: number
+  intermittent: number
   down: number
   unknown: number
   total: number
@@ -99,6 +102,7 @@ export interface AutoSwitchEntry {
 export interface HealthStatusResponse {
   summary: HealthSummary
   autoSwitchLog: AutoSwitchEntry[]
+  isChecking: boolean
 }
 
 export interface HealthChannel {

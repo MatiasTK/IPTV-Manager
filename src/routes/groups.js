@@ -55,6 +55,17 @@ router.put('/:id', (req, res) => {
   }
 });
 
+// ── POST /api/groups/delete-empty ──────────────────────────────────────────────
+router.post('/delete-empty', (req, res) => {
+  const result = db.prepare(`
+    DELETE FROM groups
+    WHERE id NOT IN (
+      SELECT DISTINCT group_id FROM channels WHERE group_id IS NOT NULL
+    )
+  `).run();
+  res.json({ ok: true, deletedCount: result.changes });
+});
+
 // ── DELETE /api/groups/:id ─────────────────────────────────────────────────────
 router.delete('/:id', (req, res) => {
   const id = Number(req.params.id);

@@ -5,7 +5,7 @@ interface StatCardProps {
   icon: LucideIcon
   label: string
   value: number | string
-  color?: 'purple' | 'green' | 'amber' | 'red' | 'slate'
+  color?: 'purple' | 'green' | 'amber' | 'red' | 'slate' | 'orange'
   className?: string
 }
 
@@ -34,6 +34,11 @@ const colorMap = {
     icon: 'text-slate-400',
     iconBg: 'bg-slate-500/10',
     value: 'text-slate-300',
+  },
+  orange: {
+    icon: 'text-orange-400',
+    iconBg: 'bg-orange-500/10',
+    value: 'text-orange-300',
   },
 }
 

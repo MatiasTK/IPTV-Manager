@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
-  Activity, Search, Radio, Loader2, RefreshCw,
+  Activity, Search, Radio, Loader2, RefreshCw, Trash2,
 } from 'lucide-react'
 import { PageHeader } from '@/components/layout/page-header'
 import { StatCard } from '@/components/shared/stat-card'
 import { HealthBadge, HealthDot } from '@/components/shared/health-badge'
 import { EmptyState } from '@/components/shared/empty-state'
+import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -14,28 +16,77 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useHealthStatus, useHealthChannels, useCheckNow } from '@/hooks/use-health'
-import { useCheckChannelHealth } from '@/hooks/use-channels'
+import { useCheckChannelHealth, useDeleteDownChannels } from '@/hooks/use-channels'
 import { formatLatency, formatDate, formatRelativeDate } from '@/lib/utils'
 import type { HealthStatus } from '@/lib/types'
 import { toast } from 'sonner'
 
+const playNotificationSound = () => {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    const audioCtx = new AudioContextClass()
+    const playBeep = (freq: number, duration: number, startTime: number) => {
+      const osc = audioCtx.createOscillator()
+      const gain = audioCtx.createGain()
+
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(freq, startTime)
+
+      gain.gain.setValueAtTime(0.15, startTime)
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration)
+
+      osc.connect(gain)
+      gain.connect(audioCtx.destination)
+
+      osc.start(startTime)
+      osc.stop(startTime + duration)
+    }
+
+    const now = audioCtx.currentTime
+    playBeep(587.33, 0.12, now)
+    playBeep(880, 0.15, now + 0.15)
+  } catch (err) {
+    console.error('Failed to play notification sound', err)
+  }
+}
+
 export default function HealthPage() {
+  const qc = useQueryClient()
   const { data: statusData, isLoading: statusLoading } = useHealthStatus()
   const { data: channelsData, isLoading: channelsLoading } = useHealthChannels()
   const checkNow = useCheckNow()
   const checkSingle = useCheckChannelHealth()
+  const deleteDown = useDeleteDownChannels()
   const [checkingId, setCheckingId] = useState<number | null>(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
 
   const summary = statusData?.summary
   const switchLog = statusData?.autoSwitchLog ?? []
   const channels = channelsData?.channels ?? []
 
+  const isChecking = statusData?.isChecking ?? false
+  const [prevChecking, setPrevChecking] = useState(false)
+
+  useEffect(() => {
+    if (isChecking && !prevChecking) {
+      toast.loading('Chequeando el estado de los canales...', { id: 'health-check' })
+    }
+    if (!isChecking && prevChecking) {
+      toast.success('Verificación finalizada con éxito!', { id: 'health-check' })
+      playNotificationSound()
+      qc.invalidateQueries({ queryKey: ['health'] })
+    }
+    setPrevChecking(isChecking)
+  }, [isChecking, prevChecking, qc])
+
   const handleCheckNow = async () => {
     try {
+      toast.loading('Iniciando verificación...', { id: 'health-check' })
       await checkNow.mutateAsync()
-      toast.info('Verificación iniciada. Los resultados se actualizarán en unos segundos.')
     } catch {
-      toast.error('Error al iniciar verificación')
+      toast.error('Error al iniciar la verificación', { id: 'health-check' })
     }
   }
 
@@ -51,6 +102,17 @@ export default function HealthPage() {
     }
   }
 
+  const handleDeleteDown = async () => {
+    try {
+      const res = await deleteDown.mutateAsync()
+      toast.success(`Se eliminaron ${res.deletedCount} canales caídos`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al eliminar canales')
+    } finally {
+      setDeleteConfirmOpen(false)
+    }
+  }
+
   return (
     <div>
       <PageHeader
@@ -58,26 +120,39 @@ export default function HealthPage() {
         subtitle="Health checking automático y log de switches"
         icon={Activity}
         actions={
-          <Button onClick={handleCheckNow} disabled={checkNow.isPending}>
-            {checkNow.isPending ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            ) : (
-              <Search className="w-4 h-4 mr-2" />
+          <div className="flex items-center gap-2">
+            {summary && summary.down > 0 && (
+              <Button
+                variant="destructive"
+                onClick={() => setDeleteConfirmOpen(true)}
+                disabled={deleteDown.isPending}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Remover caídos ({summary.down})
+              </Button>
             )}
-            Verificar ahora
-          </Button>
+            <Button onClick={handleCheckNow} disabled={checkNow.isPending}>
+              {checkNow.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Search className="w-4 h-4 mr-2" />
+              )}
+              Verificar ahora
+            </Button>
+          </div>
         }
       />
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
         {statusLoading ? (
-          Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)
+          Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)
         ) : (
           <>
             <StatCard icon={Radio} label="Total Activos" value={summary?.total ?? 0} color="purple" />
             <StatCard icon={Activity} label="Saludables" value={summary?.healthy ?? 0} color="green" />
             <StatCard icon={Activity} label="Lentos" value={summary?.degraded ?? 0} color="amber" />
+            <StatCard icon={Activity} label="Intermitentes" value={summary?.intermittent ?? 0} color="orange" />
             <StatCard icon={Activity} label="Caídos" value={summary?.down ?? 0} color="red" />
             <StatCard icon={Activity} label="Sin verificar" value={summary?.unknown ?? 0} color="slate" />
           </>
@@ -193,6 +268,16 @@ export default function HealthPage() {
           </Table>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        title="Remover canales caídos"
+        description={`¿Estás seguro de que deseas eliminar permanentemente los ${summary?.down || 0} canales que se encuentran caídos? Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar canales"
+        onConfirm={handleDeleteDown}
+        variant="destructive"
+      />
     </div>
   )
 }

@@ -22,6 +22,11 @@ const statusConfig: Record<HealthStatus, { label: string; className: string; dot
     className: 'bg-slate-500/15 text-slate-400 border-slate-500/20',
     dotClass: 'bg-slate-400',
   },
+  intermittent: {
+    label: 'Intermitente',
+    className: 'bg-orange-500/15 text-orange-400 border-orange-500/20',
+    dotClass: 'bg-orange-400',
+  },
 }
 
 interface HealthBadgeProps {
@@ -57,6 +62,7 @@ export function HealthDot({ status, size = 'md', className }: HealthDotProps) {
     degraded: 'bg-amber-400 shadow-[0_0_6px_1px_rgb(251_191_36_/_0.6)]',
     down: 'bg-red-400 shadow-[0_0_6px_1px_rgb(248_113_113_/_0.6)]',
     unknown: 'bg-slate-500',
+    intermittent: 'bg-orange-400 shadow-[0_0_6px_1px_rgb(251_146_60_/_0.6)]',
   }
   const s = size === 'sm' ? 'w-2 h-2' : 'w-2.5 h-2.5'
   return (

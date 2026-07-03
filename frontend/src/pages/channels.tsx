@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import {
-  Radio, Plus, Search, Pencil, Trash2, Link, Activity, Loader2, Tv,
+  Radio, Plus, Search, Pencil, Trash2, Link, Activity, Loader2, Tv, RotateCcw,
 } from 'lucide-react'
 import { PageHeader } from '@/components/layout/page-header'
 import { StatCard } from '@/components/shared/stat-card'
@@ -53,9 +53,28 @@ export default function ChannelsPage() {
 
   // Selection states
   const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const [bulkEditOpen, setBulkEditOpen] = useState(false)
+  const [brokenLogos, setBrokenLogos] = useState<Record<number, boolean>>({})
   const [bulkGroupId, setBulkGroupId] = useState<string>('none')
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+
+  // Sort states
+  const [sortBy, setSortBy] = useState<'default' | 'name' | 'group' | 'source' | 'status' | 'latency'>('default')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
+
+  const handleSort = (field: 'name' | 'group' | 'source' | 'status' | 'latency') => {
+    if (sortBy === field) {
+      if (sortOrder === 'asc') {
+        setSortOrder('desc')
+      } else {
+        setSortBy('default')
+      }
+    } else {
+      setSortBy(field)
+      setSortOrder('asc')
+    }
+  }
 
   const { data: channelsData, isLoading } = useChannels({ limit: 500 })
   const { data: groupsData } = useGroups()
@@ -96,7 +115,7 @@ export default function ChannelsPage() {
   const summary = healthData?.summary
 
   const filtered = useMemo(() => {
-    return channels.filter((c) => {
+    const result = channels.filter((c) => {
       if (groupFilter !== 'all') {
         if (groupFilter === 'none') {
           if (c.group_id !== null && c.group_id !== undefined) return false
@@ -112,7 +131,37 @@ export default function ChannelsPage() {
       }
       return true
     })
-  }, [channels, groupFilter, sourceFilter, healthFilter, search])
+
+    if (sortBy !== 'default') {
+      result.sort((a, b) => {
+        let valA: string | number = ''
+        let valB: string | number = ''
+
+        if (sortBy === 'name') {
+          valA = a.name.toLowerCase()
+          valB = b.name.toLowerCase()
+        } else if (sortBy === 'group') {
+          valA = (a.group_name || '').toLowerCase()
+          valB = (b.group_name || '').toLowerCase()
+        } else if (sortBy === 'source') {
+          valA = (a.source_name || '').toLowerCase()
+          valB = (b.source_name || '').toLowerCase()
+        } else if (sortBy === 'status') {
+          valA = a.health_status || ''
+          valB = b.health_status || ''
+        } else if (sortBy === 'latency') {
+          valA = a.health_latency_ms ?? 999999
+          valB = b.health_latency_ms ?? 999999
+        }
+
+        if (valA < valB) return sortOrder === 'asc' ? -1 : 1
+        if (valA > valB) return sortOrder === 'asc' ? 1 : -1
+        return 0
+      })
+    }
+
+    return result
+  }, [channels, groupFilter, sourceFilter, healthFilter, search, sortBy, sortOrder])
 
   const handleDelete = async () => {
     if (!deleteTarget) return
@@ -262,10 +311,22 @@ export default function ChannelsPage() {
               <SelectItem value="all">Todos los estados</SelectItem>
               <SelectItem value="healthy">Saludable</SelectItem>
               <SelectItem value="degraded">Lento</SelectItem>
+              <SelectItem value="intermittent">Intermitente</SelectItem>
               <SelectItem value="down">Caído</SelectItem>
               <SelectItem value="unknown">Desconocido</SelectItem>
             </SelectContent>
           </Select>
+          {sortBy !== 'default' && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSortBy('default')}
+              className="h-10 text-xs px-3 border border-dashed border-primary/50 text-primary hover:bg-primary/5 hover:text-primary flex items-center gap-1.5"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Orden original
+            </Button>
+          )}
         </div>
       )}
 
@@ -277,9 +338,9 @@ export default function ChannelsPage() {
               <TableHead className="w-12">
                 <Checkbox
                   checked={
-                    filtered.length > 0 && filtered.every((ch) => selectedIds.includes(ch.id))
+                    filtered.length > 0 && filtered.every((ch) => selectedSet.has(ch.id))
                       ? true
-                      : filtered.some((ch) => selectedIds.includes(ch.id))
+                      : filtered.some((ch) => selectedSet.has(ch.id))
                       ? "indeterminate"
                       : false
                   }
@@ -297,10 +358,51 @@ export default function ChannelsPage() {
                   }}
                 />
               </TableHead>
-              <TableHead>Canal</TableHead>
-              <TableHead>Grupo</TableHead>
-              <TableHead>Estado</TableHead>
-              <TableHead>Latencia</TableHead>
+              <TableHead
+                className="cursor-pointer select-none hover:text-foreground transition-colors"
+                onClick={() => handleSort('name')}
+              >
+                <div className="flex items-center gap-1">
+                  Canal
+                  {sortBy === 'name' && (sortOrder === 'asc' ? ' ↑' : ' ↓')}
+                </div>
+              </TableHead>
+              <TableHead
+                className="cursor-pointer select-none hover:text-foreground transition-colors"
+                onClick={() => handleSort('group')}
+              >
+                <div className="flex items-center gap-1">
+                  Grupo
+                  {sortBy === 'group' && (sortOrder === 'asc' ? ' ↑' : ' ↓')}
+                </div>
+              </TableHead>
+              <TableHead
+                className="cursor-pointer select-none hover:text-foreground transition-colors"
+                onClick={() => handleSort('source')}
+              >
+                <div className="flex items-center gap-1">
+                  Fuente
+                  {sortBy === 'source' && (sortOrder === 'asc' ? ' ↑' : ' ↓')}
+                </div>
+              </TableHead>
+              <TableHead
+                className="cursor-pointer select-none hover:text-foreground transition-colors"
+                onClick={() => handleSort('status')}
+              >
+                <div className="flex items-center gap-1">
+                  Estado
+                  {sortBy === 'status' && (sortOrder === 'asc' ? ' ↑' : ' ↓')}
+                </div>
+              </TableHead>
+              <TableHead
+                className="cursor-pointer select-none hover:text-foreground transition-colors"
+                onClick={() => handleSort('latency')}
+              >
+                <div className="flex items-center gap-1">
+                  Latencia
+                  {sortBy === 'latency' && (sortOrder === 'asc' ? ' ↑' : ' ↓')}
+                </div>
+              </TableHead>
               <TableHead className="w-16">Alt.</TableHead>
               <TableHead className="w-16">Activo</TableHead>
               <TableHead className="w-12"></TableHead>
@@ -310,14 +412,14 @@ export default function ChannelsPage() {
             {isLoading ? (
               Array.from({ length: 6 }).map((_, i) => (
                 <TableRow key={i}>
-                  {Array.from({ length: 8 }).map((_, j) => (
+                  {Array.from({ length: 9 }).map((_, j) => (
                     <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                   ))}
                 </TableRow>
               ))
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8}>
+                <TableCell colSpan={9}>
                   <EmptyState
                     icon={Radio}
                     title="No hay canales"
@@ -334,7 +436,7 @@ export default function ChannelsPage() {
                   {/* Select Checkbox */}
                   <TableCell>
                     <Checkbox
-                      checked={selectedIds.includes(channel.id)}
+                      checked={selectedSet.has(channel.id)}
                       onCheckedChange={(checked) => {
                         setSelectedIds((prev) =>
                           checked === true
@@ -348,17 +450,20 @@ export default function ChannelsPage() {
                   {/* Name + logo */}
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      {channel.tvg_logo ? (
-                        <img
-                          src={channel.tvg_logo}
-                          alt=""
-                          className="w-7 h-7 rounded object-contain flex-shrink-0 bg-muted"
-                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-                        />
-                      ) : (
+                      {!channel.tvg_logo || brokenLogos[channel.id] ? (
                         <div className="w-7 h-7 rounded bg-muted flex items-center justify-center flex-shrink-0">
                           <Tv className="w-3.5 h-3.5 text-muted-foreground" />
                         </div>
+                      ) : (
+                        <img
+                          src={`/api/channels/logo-proxy?url=${encodeURIComponent(channel.tvg_logo)}`}
+                          alt=""
+                          referrerPolicy="no-referrer"
+                          className="w-7 h-7 rounded object-contain flex-shrink-0 bg-muted"
+                          onError={() => {
+                            setBrokenLogos((prev) => ({ ...prev, [channel.id]: true }))
+                          }}
+                        />
                       )}
                       <span className="font-medium text-sm">{channel.name}</span>
                     </div>
@@ -367,6 +472,17 @@ export default function ChannelsPage() {
                   {/* Group */}
                   <TableCell className="text-sm text-muted-foreground">
                     {channel.group_name ?? '—'}
+                  </TableCell>
+
+                  {/* Fuente */}
+                  <TableCell className="text-sm text-muted-foreground">
+                    {channel.source_name ? (
+                      <Badge variant="outline" className="font-normal text-xs text-muted-foreground bg-muted/30 border-muted-foreground/20 max-w-[120px] truncate" title={channel.source_name}>
+                        {channel.source_name}
+                      </Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">Manual</span>
+                    )}
                   </TableCell>
 
                   {/* Health badge */}

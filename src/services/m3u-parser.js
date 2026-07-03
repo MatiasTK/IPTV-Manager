@@ -83,6 +83,38 @@ function parseExtInf(line) {
 }
 
 /**
+ * Detect if a channel is VOD (movie/series) based on URL or group-title.
+ * @param {Object} extInf
+ * @param {string} urlStr
+ * @returns {boolean}
+ */
+function isVod(extInf, urlStr) {
+  try {
+    const url = new URL(urlStr);
+    const pathname = url.pathname.toLowerCase();
+    if (/\.(mp4|mkv|avi|mov|flv|wmv|mpg|mpeg)$/.test(pathname)) return true;
+
+    const segments = pathname.split('/');
+    if (segments.includes('movie') || segments.includes('movies') || segments.includes('series')) {
+      return true;
+    }
+  } catch {
+    const cleanUrl = urlStr.split('?')[0].toLowerCase();
+    if (/\.(mp4|mkv|avi|mov|flv|wmv|mpg|mpeg)$/.test(cleanUrl)) return true;
+  }
+
+  if (extInf && extInf.groupTitle) {
+    const gt = extInf.groupTitle.toLowerCase();
+    // Match keywords like peliculas, películas, movies, series, vod, cinema
+    if (/\b(peliculas|películas|movies|cinema|series|vod|shows)\b/i.test(gt)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Parse a full M3U text string.
  * @param {string} text - raw M3U content
  * @returns {{ header: Object, channels: Array }}
@@ -133,41 +165,45 @@ function parseM3U(text) {
 
     // This is a URL — combine with pending EXTINF
     if (currentExtInf) {
-      const ua = currentExtInf.httpUserAgent || pendingUserAgent;
-      const ref = pendingReferrer;
+      if (!isVod(currentExtInf, line)) {
+        const ua = currentExtInf.httpUserAgent || pendingUserAgent;
+        const ref = pendingReferrer;
 
-      channels.push({
-        name: currentExtInf.displayName || currentExtInf.tvgName || 'Unknown Channel',
-        url: line,
-        tvgId: currentExtInf.tvgId,
-        tvgName: currentExtInf.tvgName,
-        tvgLogo: currentExtInf.tvgLogo,
-        groupTitle: currentExtInf.groupTitle,
-        catchup: currentExtInf.catchup,
-        catchupSource: currentExtInf.catchupSource,
-        catchupDays: currentExtInf.catchupDays,
-        httpUserAgent: ua,
-        referrer: ref,
-      });
+        channels.push({
+          name: currentExtInf.displayName || currentExtInf.tvgName || 'Unknown Channel',
+          url: line,
+          tvgId: currentExtInf.tvgId,
+          tvgName: currentExtInf.tvgName,
+          tvgLogo: currentExtInf.tvgLogo,
+          groupTitle: currentExtInf.groupTitle,
+          catchup: currentExtInf.catchup,
+          catchupSource: currentExtInf.catchupSource,
+          catchupDays: currentExtInf.catchupDays,
+          httpUserAgent: ua,
+          referrer: ref,
+        });
+      }
 
       currentExtInf = null;
       pendingUserAgent = '';
       pendingReferrer = '';
     } else {
       // Bare URL without EXTINF
-      channels.push({
-        name: 'Unknown Channel',
-        url: line,
-        tvgId: '',
-        tvgName: '',
-        tvgLogo: '',
-        groupTitle: '',
-        catchup: '',
-        catchupSource: '',
-        catchupDays: 0,
-        httpUserAgent: '',
-        referrer: '',
-      });
+      if (!isVod(null, line)) {
+        channels.push({
+          name: 'Unknown Channel',
+          url: line,
+          tvgId: '',
+          tvgName: '',
+          tvgLogo: '',
+          groupTitle: '',
+          catchup: '',
+          catchupSource: '',
+          catchupDays: 0,
+          httpUserAgent: '',
+          referrer: '',
+        });
+      }
     }
   }
 
