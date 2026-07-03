@@ -190,11 +190,12 @@ export default function HealthPage() {
         </Card>
 
         {/* Channels table */}
-        <div className="lg:col-span-2 rounded-xl border border-border bg-card overflow-hidden">
+        <div className="lg:col-span-2 min-w-0 rounded-xl border border-border bg-card overflow-hidden">
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent border-border">
                 <TableHead>Canal</TableHead>
+                <TableHead>Fuente</TableHead>
                 <TableHead>Estado</TableHead>
                 <TableHead>Latencia</TableHead>
                 <TableHead>Alt.</TableHead>
@@ -206,14 +207,14 @@ export default function HealthPage() {
               {channelsLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 6 }).map((_, j) => (
+                    {Array.from({ length: 7 }).map((_, j) => (
                       <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                     ))}
                   </TableRow>
                 ))
               ) : channels.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6}>
+                  <TableCell colSpan={7}>
                     <EmptyState
                       icon={Activity}
                       title="Sin datos de health"
@@ -224,11 +225,20 @@ export default function HealthPage() {
               ) : (
                 channels.map((ch) => (
                   <TableRow key={ch.id}>
-                    <TableCell>
+                    <TableCell className="max-w-[200px] truncate" title={ch.name}>
                       <div className="flex items-center gap-2">
                         <HealthDot status={ch.health_status as HealthStatus} size="sm" />
-                        <span className="text-sm font-medium">{ch.name}</span>
+                        <span className="text-sm font-medium truncate">{ch.name}</span>
                       </div>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {ch.source_name ? (
+                        <Badge variant="outline" className="font-normal text-xs text-muted-foreground bg-muted/30 border-muted-foreground/20 max-w-[120px] truncate" title={ch.source_name}>
+                          {ch.source_name}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground italic">Manual</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <HealthBadge status={ch.health_status as HealthStatus} />
@@ -244,7 +254,7 @@ export default function HealthPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {ch.last_health_check ? formatDate(ch.last_health_check) : '—'}
+                      {ch.last_health_check ? formatRelativeDate(ch.last_health_check) : '—'}
                     </TableCell>
                     <TableCell>
                       <Button

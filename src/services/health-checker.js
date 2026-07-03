@@ -1,10 +1,12 @@
-'use strict';
-
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 const db = require('../db/database');
 const config = require('../config');
+
+// Keep-Alive agents to reuse TCP/TLS sockets, speeding up checks and reducing connection overhead
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 40, keepAliveMsecs: 5000 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 40, keepAliveMsecs: 5000 });
 
 /**
  * Health Checker — Background Job
@@ -54,6 +56,13 @@ const getAlternativesStmt = db.prepare(`
     ca.priority
 `);
 
+const getHealthHistoryStmt = db.prepare(`
+  SELECT status FROM health_checks
+  WHERE channel_id = ?
+  ORDER BY checked_at DESC
+  LIMIT 4
+`);
+
 // Track auto-switch events in memory (visible in Health UI)
 const autoSwitchLog = [];
 const MAX_SWITCH_LOG = 100;
@@ -93,6 +102,7 @@ function checkUrl(urlStr, timeoutMs, httpUserAgent = '', referrer = '', method =
       method: method,
       headers: headers,
       timeout: timeoutMs,
+      agent: isHttps ? httpsAgent : httpAgent,
     };
 
     const req = transport.request(parsedUrl, options, (res) => {
@@ -169,7 +179,7 @@ function checkUrl(urlStr, timeoutMs, httpUserAgent = '', referrer = '', method =
  */
 async function checkUrlWithRetries(urlStr, timeoutMs, httpUserAgent = '', referrer = '', method = 'HEAD') {
   let attempt = 0;
-  const maxAttempts = 3;
+  const maxAttempts = 1; // Direct check (no retries) to speed up diagnostic on massive lists
   let lastResult;
   while (attempt < maxAttempts) {
     attempt++;
@@ -190,12 +200,18 @@ async function checkUrlWithRetries(urlStr, timeoutMs, httpUserAgent = '', referr
 async function checkChannels(channels, timeoutMs, concurrency) {
   const results = [];
   let idx = 0;
+  let checkedCount = 0;
 
   async function worker() {
     while (idx < channels.length) {
       const ch = channels[idx++];
       const result = await checkUrlWithRetries(ch.url, timeoutMs, ch.http_user_agent, ch.referrer);
       results.push({ channel: ch, result });
+      
+      checkedCount++;
+      if (checkedCount % 100 === 0 || checkedCount === channels.length) {
+        console.log(`[HealthChecker] Progress: ${checkedCount}/${channels.length} channels checked...`);
+      }
     }
   }
 
@@ -239,12 +255,14 @@ function isCheckRunning() {
   return isChecking;
 }
 
-/**
- * Run a full health check cycle.
- */
-async function runHealthCheck() {
-  const enabledSetting = db.prepare("SELECT value FROM settings WHERE key = 'health_check_enabled'").get();
-  if (enabledSetting && enabledSetting.value === '0') return;
+async function runHealthCheck(force = false) {
+  if (!force) {
+    const enabledSetting = db.prepare("SELECT value FROM settings WHERE key = 'health_check_enabled'").get();
+    if (enabledSetting && enabledSetting.value === '0') {
+      console.log('[HealthChecker] Health check is disabled in settings. Skipping.');
+      return;
+    }
+  }
 
   if (isChecking) {
     console.log('[HealthChecker] Health check is already running. Skipping.');
@@ -265,17 +283,14 @@ async function runHealthCheck() {
     config.healthCheck.concurrency
   );
 
-  const upsert = db.transaction((items) => {
+  // Batch database updates in chunks of 100 to prevent locking the event loop on large playlists
+  const batchSize = 100;
+  const chunkTx = db.transaction((items) => {
     for (const { channel, result } of items) {
       const prevStatus = channel.health_status;
 
       // Calculate health status combining current result with recent history (last 4 checks)
-      const history = db.prepare(`
-        SELECT status FROM health_checks
-        WHERE channel_id = ?
-        ORDER BY checked_at DESC
-        LIMIT 4
-      `).all(channel.id).map(r => r.status);
+      const history = getHealthHistoryStmt.all(channel.id).map(r => r.status);
 
       const allStatuses = [result.status, ...history];
       const hasSuccess = allStatuses.some(s => s === 'healthy' || s === 'degraded');
@@ -300,12 +315,19 @@ async function runHealthCheck() {
         handleAutoSwitch(channel);
       }
     }
-
-    // Purge old history
-    purgeOldChecksStmt.run();
   });
 
-  upsert(results);
+  for (let i = 0; i < results.length; i += batchSize) {
+    const chunk = results.slice(i, i + batchSize);
+    chunkTx(chunk);
+    // Yield to the Node.js event loop
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  // Purge old history once per full cycle
+  db.transaction(() => {
+    purgeOldChecksStmt.run();
+  })();
 
   const healthy = results.filter((r) => r.result.status === 'healthy').length;
   const degraded = results.filter((r) => r.result.status === 'degraded').length;
@@ -332,12 +354,7 @@ async function checkSingleChannel(channelId) {
   const prevStatus = channel.health_status;
 
   // Calculate health status combining current result with recent history
-  const history = db.prepare(`
-    SELECT status FROM health_checks
-    WHERE channel_id = ?
-    ORDER BY checked_at DESC
-    LIMIT 4
-  `).all(channel.id).map(r => r.status);
+  const history = getHealthHistoryStmt.all(channel.id).map(r => r.status);
 
   const allStatuses = [result.status, ...history];
   const hasSuccess = allStatuses.some(s => s === 'healthy' || s === 'degraded');
@@ -443,9 +460,13 @@ function startHealthChecker() {
   console.log(`[HealthChecker] Starting. Interval: ${config.healthCheck.intervalMs}ms`);
 
   // Run immediately on startup (delayed 10s to let server stabilize)
-  const initialTimeout = setTimeout(() => runHealthCheck().catch(console.error), 10000);
+  const initialTimeout = setTimeout(() => {
+    console.log('[HealthChecker] Running initial startup check...');
+    runHealthCheck().catch(console.error);
+  }, 10000);
 
   const interval = setInterval(() => {
+    console.log('[HealthChecker] Running scheduled health check...');
     runHealthCheck().catch(console.error);
   }, config.healthCheck.intervalMs);
 

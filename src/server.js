@@ -51,8 +51,8 @@ app.disable('x-powered-by');
 // The public playlist endpoint is open, handled separately
 
 // ── Body Parsers ──────────────────────────────────────────────────────────────
-app.use(express.json({ limit: '11mb' })); // Allow up to 10MB M3U + overhead
-app.use(express.urlencoded({ extended: false, limit: '11mb' }));
+app.use(express.json({ limit: '155mb' })); // Allow up to 150MB M3U + overhead
+app.use(express.urlencoded({ extended: false, limit: '155mb' }));
 app.use(cookieParser());
 
 // ── Global Rate Limiting ──────────────────────────────────────────────────────

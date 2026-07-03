@@ -15,7 +15,7 @@ const router = express.Router();
 router.use(authMiddleware);
 router.use(csrfMiddleware);
 
-const MAX_M3U_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_M3U_SIZE = 150 * 1024 * 1024; // 150MB
 
 // ── GET /api/sources ───────────────────────────────────────────────────────────
 router.get('/', (req, res) => {

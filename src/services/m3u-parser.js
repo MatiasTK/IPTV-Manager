@@ -120,27 +120,34 @@ function isVod(extInf, urlStr) {
  * @returns {{ header: Object, channels: Array }}
  */
 function parseM3U(text) {
-  // Normalize line endings
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-
   let header = { epgUrls: [], cache: '' };
   const channels = [];
 
   let currentExtInf = null;
   let pendingUserAgent = '';
   let pendingReferrer = '';
-  let lineIndex = 0;
+  let isFirstLine = true;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-
-    if (i === 0 && /^#EXTM3U/i.test(line)) {
-      header = parseHeader(line);
-      lineIndex = 1;
-      continue;
+  let pos = 0;
+  while (pos < text.length) {
+    let nextNewline = text.indexOf('\n', pos);
+    if (nextNewline === -1) {
+      nextNewline = text.length;
     }
 
-    if (!line || line === '') continue;
+    const line = text.substring(pos, nextNewline).trim();
+    pos = nextNewline + 1;
+
+    if (isFirstLine) {
+      if (/^#EXTM3U/i.test(line)) {
+        header = parseHeader(line);
+        isFirstLine = false;
+        continue;
+      }
+      isFirstLine = false;
+    }
+
+    if (!line) continue;
 
     if (/^#EXTINF:/i.test(line)) {
       currentExtInf = parseExtInf(line);

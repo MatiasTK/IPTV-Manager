@@ -150,6 +150,7 @@ export interface HealthChannel {
   health_latency_ms: number
   last_health_check: string | null
   group_name: string | null
+  source_name: string | null
   alt_count: number
 }
 

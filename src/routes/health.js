@@ -34,9 +34,11 @@ router.get('/channels', (req, res) => {
     SELECT
       c.id, c.name, c.url, c.health_status, c.health_latency_ms, c.last_health_check,
       g.name AS group_name,
+      s.name AS source_name,
       (SELECT COUNT(*) FROM channel_alternatives ca WHERE ca.primary_channel_id = c.id) AS alt_count
     FROM channels c
     LEFT JOIN groups g ON c.group_id = g.id
+    LEFT JOIN sources s ON c.source_id = s.id
     WHERE c.is_active = 1
     ORDER BY
       CASE c.health_status
@@ -71,7 +73,7 @@ router.post('/check-now', async (req, res) => {
   // Fire and forget — respond immediately
   res.json({ ok: true, message: 'Health check started.' });
   try {
-    await runHealthCheck();
+    await runHealthCheck(true);
   } catch (err) {
     console.error('[Health] check-now error:', err.message);
   }
