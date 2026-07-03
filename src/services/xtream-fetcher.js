@@ -145,7 +145,7 @@ async function fetchXtreamChannels(host, username, password) {
     .map((s) => {
       const streamId = String(s.stream_id);
       const groupTitle = categories.get(String(s.category_id)) || s.category_name || '';
-      const streamUrl = `${base}/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${streamId}.${ext}`;
+      const streamUrl = `${base}/live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${streamId}.${ext}`;
 
       return {
         name: (s.name || s.stream_display_name || 'Unknown Channel').trim(),
