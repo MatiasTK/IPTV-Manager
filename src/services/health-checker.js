@@ -83,7 +83,19 @@ function checkUrl(urlStr, timeoutMs, httpUserAgent = '', referrer = '', method =
 
     let parsedUrl;
     try {
-      parsedUrl = new URL(urlStr);
+      // Sanitize the URL before parsing: encodeURI normalises unescaped characters
+      // (spaces, brackets, pipes, etc.) that are common in IPTV stream URLs but
+      // cause Node's http.request to throw "Request path contains unescaped characters".
+      // We first decode any existing percent-encoding so we don't double-encode,
+      // then re-encode the whole thing.
+      let safeUrl = urlStr;
+      try {
+        safeUrl = encodeURI(decodeURI(urlStr));
+      } catch {
+        // decodeURI can throw on malformed sequences — keep the original in that case
+        safeUrl = urlStr;
+      }
+      parsedUrl = new URL(safeUrl);
     } catch {
       return resolve({ status: 'down', latencyMs: 0, httpStatus: null, error: 'Invalid URL' });
     }
@@ -112,7 +124,9 @@ function checkUrl(urlStr, timeoutMs, httpUserAgent = '', referrer = '', method =
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         req.destroy();
         const location = res.headers.location;
-        const nextUrl = location.startsWith('http') ? location : new URL(location, urlStr).toString();
+        const rawNext = location.startsWith('http') ? location : new URL(location, urlStr).toString();
+        let nextUrl = rawNext;
+        try { nextUrl = encodeURI(decodeURI(rawNext)); } catch { /* keep raw */ }
         checkUrl(nextUrl, timeoutMs, httpUserAgent, referrer, method, redirectCount + 1)
           .then((redirectResult) => {
             resolve({

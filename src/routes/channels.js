@@ -81,7 +81,12 @@ router.get('/', (req, res) => {
   `;
   const params = [];
 
-  if (groupId) { query += ' AND c.group_id = ?'; params.push(Number(groupId)); }
+  if (groupId === 'none') {
+    query += ' AND c.group_id IS NULL';
+  } else if (groupId) {
+    query += ' AND c.group_id = ?';
+    params.push(Number(groupId));
+  }
   if (sourceId) { query += ' AND c.source_id = ?'; params.push(Number(sourceId)); }
   if (health) { query += ' AND c.health_status = ?'; params.push(health); }
   if (search) {
@@ -127,7 +132,12 @@ router.get('/ids', (req, res) => {
   let query = 'SELECT c.id FROM channels c WHERE 1=1';
   const params = [];
 
-  if (groupId) { query += ' AND c.group_id = ?'; params.push(Number(groupId)); }
+  if (groupId === 'none') {
+    query += ' AND c.group_id IS NULL';
+  } else if (groupId) {
+    query += ' AND c.group_id = ?';
+    params.push(Number(groupId));
+  }
   if (sourceId) { query += ' AND c.source_id = ?'; params.push(Number(sourceId)); }
   if (health) { query += ' AND c.health_status = ?'; params.push(health); }
   if (search) {

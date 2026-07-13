@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link as LinkIcon, Plus, RefreshCw, Pencil, Trash2, FileText, Loader2, Clock, Server, Eye } from 'lucide-react'
+import { Link as LinkIcon, Plus, RefreshCw, Pencil, Trash2, FileText, Loader2, Clock, Server, Eye, EyeOff } from 'lucide-react'
 import { PageHeader } from '@/components/layout/page-header'
 import { EmptyState } from '@/components/shared/empty-state'
 import { Button } from '@/components/ui/button'
@@ -58,6 +58,7 @@ export default function SourcesPage() {
   const [xtHost,     setXtHost]     = useState('')
   const [xtUser,     setXtUser]     = useState('')
   const [xtPass,     setXtPass]     = useState('')
+  const [xtShowPass, setXtShowPass] = useState(false)
   const [xtAutoSync, setXtAutoSync] = useState(false)
   const [xtInterval, setXtInterval] = useState('24')
 
@@ -67,16 +68,28 @@ export default function SourcesPage() {
 
   const sources = data?.sources ?? []
 
-  // ── Edit existing source (URL only — no preview) ─────────────────────────
+  // ── Edit existing source — routes to correct dialog based on type ──────────
   const openEdit = (s: Source) => {
     setEditSource(s)
-    setSrcName(s.name)
-    setSrcUrl(s.url)
-    setSrcAutoSync(!!s.auto_sync)
-    setSrcInterval(String(s.sync_interval_hours))
-    setSrcPriority(String(s.priority ?? 1))
-    setSrcAutoPriority(s.auto_priority === 1)
-    setUrlDialogOpen(true)
+    if (s.type === 'xtream') {
+      // Pre-fill Xtream dialog fields
+      setXtName(s.name)
+      setXtHost(s.xtream_host || '')
+      setXtUser(s.xtream_user || '')
+      setXtPass(s.xtream_pass || '')
+      setXtAutoSync(!!s.auto_sync)
+      setXtInterval(String(s.sync_interval_hours))
+      setXtreamDialogOpen(true)
+    } else {
+      // Pre-fill URL / manual dialog fields
+      setSrcName(s.name)
+      setSrcUrl(s.url)
+      setSrcAutoSync(!!s.auto_sync)
+      setSrcInterval(String(s.sync_interval_hours))
+      setSrcPriority(String(s.priority ?? 1))
+      setSrcAutoPriority(s.auto_priority === 1)
+      setUrlDialogOpen(true)
+    }
   }
 
   const openCreate = () => {
@@ -91,7 +104,7 @@ export default function SourcesPage() {
   }
 
   const handleSaveUrl = async () => {
-    // EDIT mode: just update metadata (no re-import)
+    // EDIT mode: update URL/manual source metadata (no re-import)
     if (!editSource || !srcName.trim()) return
     try {
       await updateSource.mutateAsync({
@@ -105,6 +118,31 @@ export default function SourcesPage() {
       })
       toast.success('Fuente actualizada')
       setUrlDialogOpen(false)
+      setEditSource(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al guardar')
+    }
+  }
+
+  const handleSaveXtream = async () => {
+    // EDIT mode: update Xtream source metadata (no re-import)
+    if (!editSource || !xtName.trim()) return
+    try {
+      await updateSource.mutateAsync({
+        id: editSource.id,
+        name: xtName.trim(),
+        url: '',
+        xtreamHost: xtHost.trim(),
+        xtreamUser: xtUser.trim(),
+        xtreamPass: xtPass.trim(),
+        autoSync: xtAutoSync ? 1 : 0,
+        syncIntervalHours: Number(xtInterval) || 24,
+        priority: editSource.priority ?? 1,
+        autoPriority: editSource.auto_priority ?? 1,
+      })
+      toast.success('Fuente Xtream actualizada')
+      setXtreamDialogOpen(false)
+      setEditSource(null)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al guardar')
     }
@@ -289,11 +327,20 @@ export default function SourcesPage() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                {source.url && (
+                {source.type === 'xtream' ? (
+                  <div className="space-y-0.5">
+                    <p className="text-xs font-mono text-muted-foreground truncate" title={source.xtream_host}>
+                      {source.xtream_host || '—'}
+                    </p>
+                    <p className="text-xs text-muted-foreground/60 truncate">
+                      Usuario: <span className="font-mono">{source.xtream_user || '—'}</span>
+                    </p>
+                  </div>
+                ) : source.url ? (
                   <p className="text-xs font-mono text-muted-foreground truncate" title={source.url}>
                     {source.url}
                   </p>
-                )}
+                ) : null}
                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1">
                     <Clock className="w-3 h-3" />
@@ -449,13 +496,15 @@ export default function SourcesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Xtream import dialog ────────────────────────────────────────────── */}
-      <Dialog open={xtreamDialogOpen} onOpenChange={setXtreamDialogOpen}>
+      {/* ── Xtream import/edit dialog ────────────────────────────────────────── */}
+      <Dialog open={xtreamDialogOpen} onOpenChange={(open) => { setXtreamDialogOpen(open); if (!open) setEditSource(null) }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Agregar fuente Xtream Codes</DialogTitle>
+            <DialogTitle>{editSource ? 'Editar fuente Xtream' : 'Agregar fuente Xtream Codes'}</DialogTitle>
             <DialogDescription>
-              Ingresá las credenciales. Se conectará al panel para previsualizar los canales antes de importar.
+              {editSource
+                ? 'Editá las credenciales y configuración de esta fuente Xtream.'
+                : 'Ingresá las credenciales. Se conectará al panel para previsualizar los canales antes de importar.'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -472,8 +521,30 @@ export default function SourcesPage() {
               <Input id="xt-user" value={xtUser} onChange={(e) => setXtUser(e.target.value)} placeholder="usuario123" autoComplete="username" />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="xt-pass">Contraseña *</Label>
-              <Input id="xt-pass" type="password" value={xtPass} onChange={(e) => setXtPass(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
+              <Label htmlFor="xt-pass">Contraseña {!editSource && '*'}</Label>
+              <div className="relative">
+                <Input
+                  id="xt-pass"
+                  type={xtShowPass ? 'text' : 'password'}
+                  value={xtPass}
+                  onChange={(e) => setXtPass(e.target.value)}
+                  placeholder={editSource ? '(sin cambios)' : '••••••••'}
+                  autoComplete="current-password"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setXtShowPass(v => !v)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  tabIndex={-1}
+                  title={xtShowPass ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                >
+                  {xtShowPass
+                    ? <EyeOff className="w-4 h-4" />
+                    : <Eye className="w-4 h-4" />
+                  }
+                </button>
+              </div>
             </div>
             <div className="flex items-center justify-between">
               <Label htmlFor="xt-autosync">Auto-sync</Label>
@@ -487,16 +558,26 @@ export default function SourcesPage() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setXtreamDialogOpen(false)}>Cancelar</Button>
-            <Button
-              onClick={handlePreviewXtream}
-              disabled={!xtHost.trim() || !xtUser.trim() || !xtPass.trim() || previewSource.isPending}
-            >
-              {previewSource.isPending
-                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Conectando...</>
-                : <><Eye className="w-4 h-4 mr-2" />Previsualizar</>
-              }
-            </Button>
+            <Button variant="outline" onClick={() => { setXtreamDialogOpen(false); setEditSource(null) }}>Cancelar</Button>
+            {editSource ? (
+              <Button
+                onClick={handleSaveXtream}
+                disabled={!xtName.trim() || !xtHost.trim() || !xtUser.trim() || updateSource.isPending}
+              >
+                {updateSource.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Guardar
+              </Button>
+            ) : (
+              <Button
+                onClick={handlePreviewXtream}
+                disabled={!xtHost.trim() || !xtUser.trim() || !xtPass.trim() || previewSource.isPending}
+              >
+                {previewSource.isPending
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Conectando...</>
+                  : <><Eye className="w-4 h-4 mr-2" />Previsualizar</>
+                }
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

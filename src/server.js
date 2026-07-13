@@ -19,6 +19,7 @@ const settingsRoutes = require('./routes/settings');
 const healthRoutes = require('./routes/health');
 const rawEditorRoutes = require('./routes/raw-editor');
 const playlistRoutes = require('./routes/playlist');
+const checkerRoutes  = require('./routes/checker');
 
 const app = express();
 
@@ -72,6 +73,7 @@ app.use('/api/sources', sourcesRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/raw', rawEditorRoutes);
+app.use('/api/checker', checkerRoutes);
 
 // ── Public Playlist Endpoint (no auth required) ───────────────────────────────
 app.use('/playlist', playlistRoutes);

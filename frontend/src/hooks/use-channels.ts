@@ -5,7 +5,7 @@ import type { Channel, ChannelWithAlternatives, ChannelFilters } from '@/lib/typ
 function buildChannelsUrl(filters: ChannelFilters = {}) {
   const params = new URLSearchParams()
   if (filters.search) params.set('search', filters.search)
-  if (filters.groupId) params.set('groupId', String(filters.groupId))
+  if (filters.groupId !== undefined && filters.groupId !== '') params.set('groupId', String(filters.groupId))
   if (filters.sourceId) params.set('sourceId', String(filters.sourceId))
   if (filters.health) params.set('health', filters.health)
   if (filters.sortBy) params.set('sortBy', filters.sortBy)
@@ -18,7 +18,7 @@ function buildChannelsUrl(filters: ChannelFilters = {}) {
 function buildIdsUrl(filters: Omit<ChannelFilters, 'limit' | 'page' | 'sortBy' | 'sortOrder'> = {}) {
   const params = new URLSearchParams()
   if (filters.search) params.set('search', filters.search)
-  if (filters.groupId) params.set('groupId', String(filters.groupId))
+  if (filters.groupId !== undefined && filters.groupId !== '') params.set('groupId', String(filters.groupId))
   if (filters.sourceId) params.set('sourceId', String(filters.sourceId))
   if (filters.health) params.set('health', filters.health)
   return `/api/channels/ids?${params}`

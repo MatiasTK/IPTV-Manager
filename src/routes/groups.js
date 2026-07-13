@@ -69,12 +69,22 @@ router.post('/delete-empty', (req, res) => {
 // ── DELETE /api/groups/:id ─────────────────────────────────────────────────────
 router.delete('/:id', (req, res) => {
   const id = Number(req.params.id);
+  const deleteChannels = req.query.deleteChannels === 'true';
   const existing = db.prepare('SELECT id FROM groups WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: 'Group not found.' });
 
-  // Channels with this group will have group_id = NULL (ON DELETE SET NULL)
-  db.prepare('DELETE FROM groups WHERE id = ?').run(id);
-  res.json({ ok: true });
+  try {
+    db.transaction(() => {
+      if (deleteChannels) {
+        db.prepare('DELETE FROM channels WHERE group_id = ?').run(id);
+      }
+      // Note: If deleteChannels is false, channels with this group will have group_id = NULL due to ON DELETE SET NULL constraint in schema.
+      db.prepare('DELETE FROM groups WHERE id = ?').run(id);
+    })();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── PATCH /api/groups/reorder ─────────────────────────────────────────────────

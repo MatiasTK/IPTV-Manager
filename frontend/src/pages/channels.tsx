@@ -99,7 +99,7 @@ export default function ChannelsPage() {
   // ── Active filters object (passed to queries) ───────────────────────────
   const activeFilters: ChannelFilters = {
     search: debouncedSearch || undefined,
-    groupId: groupFilter !== 'all' ? (groupFilter === 'none' ? ('' as '') : Number(groupFilter)) : undefined,
+    groupId: groupFilter !== 'all' ? (groupFilter === 'none' ? 'none' : Number(groupFilter)) : undefined,
     sourceId: sourceFilter !== 'all' ? Number(sourceFilter) : undefined,
     health: healthFilter !== 'all' ? (healthFilter as HealthStatus) : undefined,
     sortBy,

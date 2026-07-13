@@ -12,6 +12,7 @@ import HealthPage from '@/pages/health'
 import DuplicatesPage from '@/pages/duplicates'
 import RawEditorPage from '@/pages/raw-editor'
 import SettingsPage from '@/pages/settings'
+import CheckerPage from '@/pages/checker'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -55,6 +56,7 @@ function AppRoutes() {
         <Route path="/health" element={<HealthPage />} />
         <Route path="/duplicates" element={<DuplicatesPage />} />
         <Route path="/raw-editor" element={<RawEditorPage />} />
+        <Route path="/checker" element={<CheckerPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/channels" replace />} />
       </Route>

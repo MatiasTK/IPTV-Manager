@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Switch } from '@/components/ui/switch'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
@@ -33,6 +34,7 @@ export default function GroupsPage() {
   const [formOpen, setFormOpen] = useState(false)
   const [editGroup, setEditGroup] = useState<Group | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Group | null>(null)
+  const [deleteChannels, setDeleteChannels] = useState(false)
   const [deleteEmptyConfirmOpen, setDeleteEmptyConfirmOpen] = useState(false)
   const [name, setName] = useState('')
 
@@ -87,12 +89,13 @@ export default function GroupsPage() {
   const handleDelete = async () => {
     if (!deleteTarget) return
     try {
-      await deleteGroup.mutateAsync(deleteTarget.id)
+      await deleteGroup.mutateAsync({ id: deleteTarget.id, deleteChannels })
       toast.success('Grupo eliminado')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al eliminar')
     } finally {
       setDeleteTarget(null)
+      setDeleteChannels(false)
     }
   }
 
@@ -269,14 +272,43 @@ export default function GroupsPage() {
         </DialogContent>
       </Dialog>
 
-      <ConfirmDialog
-        open={!!deleteTarget}
-        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
-        title="Eliminar grupo"
-        description={`Los canales de "${deleteTarget?.name}" quedarán sin grupo. Esta acción no se puede deshacer.`}
-        confirmLabel="Eliminar"
-        onConfirm={handleDelete}
-      />
+      {/* Delete group dialog */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteChannels(false) } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Eliminar grupo</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 space-y-4">
+            <p className="text-sm text-muted-foreground">
+              ¿Estás seguro de que deseas eliminar el grupo "{deleteTarget?.name}"?
+            </p>
+            
+            <div className="flex items-center space-x-3 bg-muted/50 p-3 rounded-lg border border-border">
+              <Switch id="delete-channels-toggle" checked={deleteChannels} onCheckedChange={setDeleteChannels} />
+              <div className="space-y-0.5">
+                <Label htmlFor="delete-channels-toggle" className="text-sm font-medium cursor-pointer">
+                  Eliminar canales del grupo
+                </Label>
+                <p className="text-xs text-muted-foreground">Borra todos los canales asociados a esta categoría</p>
+              </div>
+            </div>
+            {!deleteChannels && (
+              <p className="text-xs text-muted-foreground px-1">
+                Nota: Si no los eliminas, los canales se conservarán y quedarán sin grupo asignado.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDeleteTarget(null); setDeleteChannels(false) }}>
+              Cancelar
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleteGroup.isPending}>
+              {deleteGroup.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Eliminar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Auto Suggest Dialog */}
       <Dialog open={suggestOpen} onOpenChange={setSuggestOpen}>

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router'
 import {
   Radio, FolderOpen, Link, Copy, FileCode, Activity,
-  Settings, LogOut, Tv, ChevronLeft, ChevronRight, Menu, X
+  Settings, LogOut, Tv, ChevronLeft, ChevronRight, Menu, X, ShieldCheck
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/use-auth'
@@ -35,6 +35,7 @@ const navSections = [
     items: [
       { to: '/duplicates', icon: Copy, label: 'Duplicados' },
       { to: '/raw-editor', icon: FileCode, label: 'Editor Raw' },
+      { to: '/checker', icon: ShieldCheck, label: 'IPTV Checker' },
     ] as NavItem[],
   },
   {

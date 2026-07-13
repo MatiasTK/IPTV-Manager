@@ -23,7 +23,7 @@ export const onAuthError = (cb: () => void) => {
 }
 const dispatchAuthError = () => authErrorEvent.dispatchEvent(new Event('auth-error'))
 
-function getCsrfToken(): string | null {
+export function getCsrfToken(): string | null {
   // In production cookies are __Host-prefixed, in dev they're plain
   const names = ['__Host-csrf', 'csrf']
   for (const name of names) {

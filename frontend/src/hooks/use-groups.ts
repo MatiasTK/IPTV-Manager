@@ -30,7 +30,8 @@ export function useUpdateGroup() {
 export function useDeleteGroup() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => api.delete(`/api/groups/${id}`),
+    mutationFn: ({ id, deleteChannels }: { id: number; deleteChannels: boolean }) =>
+      api.delete(`/api/groups/${id}?deleteChannels=${deleteChannels}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['groups'] })
       qc.invalidateQueries({ queryKey: ['channels'] })
