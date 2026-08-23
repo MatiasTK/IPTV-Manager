@@ -1,26 +1,5 @@
 #EXTM3U x-tvg-url="https://iptv-epg.org/files/epg-ar.xml.gz,https://epgshare01.online/epgshare01/epg_ripper_AR1.xml.gz"
 
-#EXTINF:-1 tvg-id="ch_10531" tvg-name="DSports 2 HD" group-title="⚽ Deportes",DSports 2 HD
-http://190.7.19.197:232/play/a09h/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10532" tvg-name="DSports HD" group-title="⚽ Deportes",DSports HD
-http://190.7.19.197:232/play/a09i/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10990" tvg-name="DSPORTS HD" group-title="⚽ Deportes",DSPORTS HD
-http://190.238.43.117:9000/play/a09d/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10992" tvg-name="DSPORTS2 HD" group-title="⚽ Deportes",DSPORTS2 HD
-http://190.238.43.117:9000/play/a09f/index.m3u8
-
-#EXTINF:-1 tvg-id="DSports" tvg-name="DSports" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/4/4b/DSports_logo.svg" group-title="⚽ Deportes",DSports (Opción 1)
-http://190.108.83.69:8000/play/a05w/index.m3u8
-
-#EXTINF:-1 tvg-id="DSports" tvg-name="DSports" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/4/4b/DSports_logo.svg" group-title="⚽ Deportes",DSports (Opción 10)
-http://8.243.126.131:8000/play/a05a/index.m3u8
-
-#EXTINF:-1 tvg-id="DSports" tvg-name="DSports" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/4/4b/DSports_logo.svg" group-title="⚽ Deportes",DSports (Opción 4)
-http://181.64.27.65:8000/play/a0dq/index.m3u8
-
 #EXTINF:-1 tvg-id="DSports" tvg-name="DSports" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/4/4b/DSports_logo.svg" group-title="⚽ Deportes",DSports (Opción 5)
 http://38.187.7.252:8000/play/a03d/index.m3u8
 
@@ -30,83 +9,8 @@ http://191.97.59.33:8000/play/a09t/index.m3u8
 #EXTINF:-1 tvg-id="DSports" tvg-name="DSports" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/4/4b/DSports_logo.svg" group-title="⚽ Deportes",DSports (Opción 8)
 http://190.117.20.37:8000/play/a08d/index.m3u
 
-#EXTINF:-1 tvg-id="ch_10991" tvg-name="DSPORTS+ HD" group-title="⚽ Deportes",DSPORTS+ HD
-http://190.238.43.117:9000/play/a09g/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10548" tvg-name="ESPN 2 HD" group-title="⚽ Deportes",ESPN 2 HD
-http://190.7.19.197:232/play/a03m/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10549" tvg-name="ESPN 3 HD" group-title="⚽ Deportes",ESPN 3 HD
-http://190.7.19.197:232/play/a03o/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10550" tvg-name="ESPN 4 HD" group-title="⚽ Deportes",ESPN 4 HD
-http://190.7.19.197:232/play/a05t/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10551" tvg-name="ESPN HD" group-title="⚽ Deportes",ESPN HD
-http://190.7.19.197:232/play/a03n/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11004" tvg-name="ESPN 2 HD" group-title="⚽ Deportes",ESPN 2 HD
-http://190.238.43.117:9000/play/a0d7/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11005" tvg-name="ESPN 3 HD" group-title="⚽ Deportes",ESPN 3 HD
-http://190.238.43.117:9000/play/a0fq/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11006" tvg-name="ESPN 4 HD" group-title="⚽ Deportes",ESPN 4 HD
-http://190.238.43.117:9000/play/a0gv/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11007" tvg-name="ESPN 5 HD" group-title="⚽ Deportes",ESPN 5 HD
-http://190.238.43.117:9000/play/a0fh/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11008" tvg-name="ESPN 6 HD" group-title="⚽ Deportes",ESPN 6 HD
-http://190.238.43.117:9000/play/a0fb/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11009" tvg-name="ESPN 7 HD" group-title="⚽ Deportes",ESPN 7 HD
-http://190.238.43.117:9000/play/a0go/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11010" tvg-name="ESPN HD" group-title="⚽ Deportes",ESPN HD
-http://190.238.43.117:9000/play/a0d6/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10552" tvg-name="ESPN Premium HD" group-title="⚽ Deportes",ESPN Premium HD
-http://190.7.19.197:232/play/a038/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11011" tvg-name="ESPN Premium HD" group-title="⚽ Deportes",ESPN Premium HD
-http://190.238.43.117:9000/play/a0gd/index.m3u8
-
-#EXTINF:-1 tvg-id="ESPNPremiumAR" tvg-name="ESPN Premium AR" group-title="⚽ Deportes",ESPN Premium Argentina ⚽
-http://38.199.4.105:9999/play/a0i9/index.m3u8
-
 #EXTINF:-1 tvg-id="FIFAPlus.uk" tvg-name="FIFA+" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/FIFA%2B_(2025).svg/960px-FIFA%2B_(2025).svg.png" group-title="⚽ Deportes",FIFA+
 https://d2w9q46ikgrcwx.cloudfront.net/v1/sysdata_s_p_a_fifa_7/samsungheadend_us/latest/main/hls/playlist.m3u8
-
-#EXTINF:-1 tvg-id="ch_10563" tvg-name="Fox Sports 2 HD" group-title="⚽ Deportes",Fox Sports 2 HD
-http://190.7.19.197:232/play/a03p/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10564" tvg-name="Fox Sports 3 HD" group-title="⚽ Deportes",Fox Sports 3 HD
-http://190.7.19.197:232/play/a04x/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10565" tvg-name="Fox Sports HD" group-title="⚽ Deportes",Fox Sports HD
-http://190.7.19.197:232/play/a05u/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11027" tvg-name="Golden Premiere 2 HD" group-title="⚽ Deportes",Golden Premiere 2 HD
-http://190.238.43.117:9000/play/a0ia/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11028" tvg-name="Golden Premiere HD" group-title="⚽ Deportes",Golden Premiere HD
-http://190.238.43.117:9000/play/a0i9/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11064" tvg-name="Movistar Deportes" group-title="⚽ Deportes",Movistar Deportes
-http://190.238.43.117:9000/play/a0e5/index.m3u8
-
-#EXTINF:-1 tvg-id="TNTSportAR" tvg-name="TNT Sport AR" group-title="⚽ Deportes",TNT Sport Argentina ⚽
-http://38.199.4.105:9999/play/a0hy/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10616" tvg-name="TNT Sports HD" group-title="⚽ Deportes",TNT Sports HD
-http://190.7.19.197:232/play/a037/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11101" tvg-name="TNT Sports Premiun HD" group-title="⚽ Deportes",TNT Sports Premiun HD
-http://190.238.43.117:9000/play/a0g4/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10623" tvg-name="TyC Sports HD" group-title="⚽ Deportes",TyC Sports HD
-http://190.7.19.197:232/play/a04w/index.m3u8
 
 #EXTINF:-1 tvg-id="TyCSports2.ar@SD" tvg-name="TyC Sports 2 (720p)" group-title="⚽ Deportes",TyC Sports 2 (720p)
 http://200.91.32.158:8080/tyc2hd/index.m3u8
@@ -117,260 +21,17 @@ https://amg26268-amg26268c14-freelivesports-emea-10267.playouts.now.amagi.tv/ts-
 #EXTINF:-1 tvg-id="TyCSportsUSA.ar@SD" tvg-name="TyC Sports USA" group-title="⚽ Deportes",TyC Sports USA
 http://45.170.130.224:8000/play/a020/index.m3u8
 
-#EXTINF:-1 tvg-id="ch_10498" tvg-name="A&E HD" group-title="🍿 Cine y Series",A&E HD
-http://190.7.19.197:232/play/a00c/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10943" tvg-name="A&E HD" group-title="🍿 Cine y Series",A&E HD
-http://190.238.43.117:9000/play/a0fc/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10502" tvg-name="AMC" group-title="🍿 Cine y Series",AMC
-http://190.7.19.197:232/play/a046/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10945" tvg-name="AMC HD" group-title="🍿 Cine y Series",AMC HD
-http://190.238.43.117:9000/play/a0fk/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10503" tvg-name="AMC SERIES" group-title="🍿 Cine y Series",AMC SERIES
-http://190.7.19.197:232/play/a052/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10946" tvg-name="AMC Series" group-title="🍿 Cine y Series",AMC Series
-http://190.238.43.117:9000/play/a0dq/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10507" tvg-name="AXN HD" group-title="🍿 Cine y Series",AXN HD
-http://190.7.19.197:232/play/a00b/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10950" tvg-name="AXN HD" group-title="🍿 Cine y Series",AXN HD
-http://190.238.43.117:9000/play/a0gr/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10951" tvg-name="AZ CINEMA HD" group-title="🍿 Cine y Series",AZ CINEMA HD
-http://190.238.43.117:9000/play/a0iy/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10979" tvg-name="Cine Familiar HD" group-title="🍿 Cine y Series",Cine Familiar HD
-http://190.238.43.117:9000/play/a0he/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10980" tvg-name="Cine Hispano HD" group-title="🍿 Cine y Series",Cine Hispano HD
-http://190.238.43.117:9000/play/a0hd/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10981" tvg-name="Cine Premium HD" group-title="🍿 Cine y Series",Cine Premium HD
-http://190.238.43.117:9000/play/a0hc/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10525" tvg-name="Cine.AR" group-title="🍿 Cine y Series",Cine.AR
-http://190.7.19.197:232/play/a04b/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10526" tvg-name="Cinecanal HD" group-title="🍿 Cine y Series",Cinecanal HD
-http://190.7.19.197:232/play/a05y/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10982" tvg-name="Cinecanal HD" group-title="🍿 Cine y Series",Cinecanal HD
-http://190.238.43.117:9000/play/a0gm/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10527" tvg-name="Cinemax" group-title="🍿 Cine y Series",Cinemax
-http://190.7.19.197:232/play/a009/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10983" tvg-name="Cinemax" group-title="🍿 Cine y Series",Cinemax
-http://190.238.43.117:9000/play/a0ep/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10529" tvg-name="Comedy Central HD" group-title="🍿 Cine y Series",Comedy Central HD
-http://190.7.19.197:232/play/a01d/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10984" tvg-name="Comedy Central HD" group-title="🍿 Cine y Series",Comedy Central HD
-http://190.238.43.117:9000/play/a0fd/index.m3u8
-
-#EXTINF:-1 tvg-id="ComedyCentralLatinAmerica.us@Panregional" tvg-name="Comedy Central Latin America (1080p)" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/a/aa/Comedy_Central_2018.svg/960px-Comedy_Central_2018.svg.png" group-title="🍿 Cine y Series",Comedy Central Latin America (1080p)
-http://181.119.93.83:8000/play/a1di/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11001" tvg-name="DreamWorks HD" group-title="🍿 Cine y Series",DreamWorks HD
-http://190.238.43.117:9000/play/a0iq/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10561" tvg-name="FX HD" group-title="🍿 Cine y Series",FX HD
-http://190.7.19.197:232/play/a04z/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11018" tvg-name="FX HD" group-title="🍿 Cine y Series",FX HD
-http://190.238.43.117:9000/play/a0gw/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11024" tvg-name="Golden" group-title="🍿 Cine y Series",Golden
-http://190.238.43.117:9000/play/a0dx/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11026" tvg-name="Golden HD" group-title="🍿 Cine y Series",Golden HD
-http://190.238.43.117:9000/play/a0dm/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11025" tvg-name="Golden Edge" group-title="🍿 Cine y Series",Golden Edge
-http://190.238.43.117:9000/play/a0dw/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10568" tvg-name="HBO 2" group-title="🍿 Cine y Series",HBO 2
-http://190.7.19.197:232/play/a05g/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11032" tvg-name="HBO HD" group-title="🍿 Cine y Series",HBO HD
-http://190.238.43.117:9000/play/a0fn/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11039" tvg-name="HBO2 HD" group-title="🍿 Cine y Series",HBO2 HD
-http://190.238.43.117:9000/play/a0hy/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10569" tvg-name="HBO Family" group-title="🍿 Cine y Series",HBO Family
-http://190.7.19.197:232/play/a01m/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11031" tvg-name="HBO Family HD" group-title="🍿 Cine y Series",HBO Family HD
-http://190.238.43.117:9000/play/a0ge/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11033" tvg-name="HBO Mundi" group-title="🍿 Cine y Series",HBO Mundi
-http://190.238.43.117:9000/play/a0ej/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10571" tvg-name="HBO Plus" group-title="🍿 Cine y Series",HBO Plus
-http://190.7.19.197:232/play/a05f/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11035" tvg-name="HBO Plus" group-title="🍿 Cine y Series",HBO Plus
-http://190.238.43.117:9000/play/a0dz/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11036" tvg-name="HBO Plus HD" group-title="🍿 Cine y Series",HBO Plus HD
-http://190.238.43.117:9000/play/a0hz/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10570" tvg-name="HBO POP" group-title="🍿 Cine y Series",HBO POP
-http://190.7.19.197:232/play/a016/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11034" tvg-name="HBO POP HD" group-title="🍿 Cine y Series",HBO POP HD
-http://190.238.43.117:9000/play/a0g5/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10572" tvg-name="HBO Signature" group-title="🍿 Cine y Series",HBO Signature
-http://190.7.19.197:232/play/a04g/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11037" tvg-name="HBO Signature" group-title="🍿 Cine y Series",HBO Signature
-http://190.238.43.117:9000/play/a0ei/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10573" tvg-name="HBO Xtreme" group-title="🍿 Cine y Series",HBO Xtreme
-http://190.7.19.197:232/play/a017/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11038" tvg-name="HBO Xtreme HD" group-title="🍿 Cine y Series",HBO Xtreme HD
-http://190.238.43.117:9000/play/a0gf/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10582" tvg-name="Lifetime" group-title="🍿 Cine y Series",Lifetime
-http://190.7.19.197:232/play/a01l/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11055" tvg-name="Lifetime" group-title="🍿 Cine y Series",Lifetime
-http://190.238.43.117:9000/play/a0ey/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11052" tvg-name="LIFETIME HD" group-title="🍿 Cine y Series",LIFETIME HD
-http://190.238.43.117:9000/play/a0ij/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10603" tvg-name="Sony HD" group-title="🍿 Cine y Series",Sony HD
-http://190.7.19.197:232/play/a01g/index.m3u8
-
 #EXTINF:-1 tvg-id="SonyChannel.ar@SD" tvg-name="Sony Channel (1080p)" group-title="🍿 Cine y Series",Sony Channel (1080p)
 http://138.121.15.230:9002/SONY/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10604" tvg-name="Sony Movies HD" group-title="🍿 Cine y Series",Sony Movies HD
-http://190.7.19.197:232/play/a01i/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11084" tvg-name="Sony Movies" group-title="🍿 Cine y Series",Sony Movies
-http://190.238.43.117:9000/play/a0f8/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11085" tvg-name="Sony Movies HD" group-title="🍿 Cine y Series",Sony Movies HD
-http://190.238.43.117:9000/play/a0hr/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10605" tvg-name="Space HD" group-title="🍿 Cine y Series",Space HD
-http://190.7.19.197:232/play/a050/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11086" tvg-name="Space HD" group-title="🍿 Cine y Series",Space HD
-http://190.238.43.117:9000/play/a0gt/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10606" tvg-name="Star Channel HD" group-title="🍿 Cine y Series",Star Channel HD
-http://190.7.19.197:232/play/a05w/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11087" tvg-name="Star Channel HD" group-title="🍿 Cine y Series",Star Channel HD
-http://190.238.43.117:9000/play/a0gx/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11088" tvg-name="Star TVE HD" group-title="🍿 Cine y Series",Star TVE HD
-http://190.238.43.117:9000/play/a0ht/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10607" tvg-name="Studio Universal" group-title="🍿 Cine y Series",Studio Universal
-http://190.7.19.197:232/play/a049/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11090" tvg-name="Studio Universal HD" group-title="🍿 Cine y Series",Studio Universal HD
-http://190.238.43.117:9000/play/a0d8/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10613" tvg-name="TNT HD" group-title="🍿 Cine y Series",TNT HD
-http://190.7.19.197:232/play/a060/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11098" tvg-name="TNT HD" group-title="🍿 Cine y Series",TNT HD
-http://190.238.43.117:9000/play/a0gl/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10614" tvg-name="TNT Novelas HD" group-title="🍿 Cine y Series",TNT Novelas HD
-http://190.7.19.197:232/play/a00g/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11099" tvg-name="TNT Novelas HD" group-title="🍿 Cine y Series",TNT Novelas HD
-http://190.238.43.117:9000/play/a0fp/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10615" tvg-name="TNT Series HD" group-title="🍿 Cine y Series",TNT Series HD
-http://190.7.19.197:232/play/a088/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11100" tvg-name="TNT Series HD" group-title="🍿 Cine y Series",TNT Series HD
-http://190.238.43.117:9000/play/a0fl/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10626" tvg-name="Universal HD" group-title="🍿 Cine y Series",Universal HD
-http://190.7.19.197:232/play/a03u/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11111" tvg-name="UNIVERSAL CHANNEL HD" group-title="🍿 Cine y Series",UNIVERSAL CHANNEL HD
-http://190.238.43.117:9000/play/a0ff/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10629" tvg-name="Warner Channel HD" group-title="🍿 Cine y Series",Warner Channel HD
-http://190.7.19.197:232/play/a01h/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11119" tvg-name="Warner TV HD" group-title="🍿 Cine y Series",Warner TV HD
-http://190.238.43.117:9000/play/a0gq/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10508" tvg-name="Adult swim HD" group-title="🧸 Infantiles",Adult swim HD
-http://190.7.19.197:232/play/a01s/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10955" tvg-name="Adult Swim" group-title="🧸 Infantiles",Adult Swim
-http://190.238.43.117:9000/play/a0f0/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10944" tvg-name="ADULT SWIM HD" group-title="🧸 Infantiles",ADULT SWIM HD
-http://190.238.43.117:9000/play/a0il/index.m3u8
 
 #EXTINF:-1 tvg-id="ch_10746" tvg-name="Bob Esponja" group-title="🧸 Infantiles",Bob Esponja
 https://jmp2.uk/plu-6254598f5083f800076d8563.m3u8
 
-#EXTINF:-1 tvg-id="ch_10524" tvg-name="Cartoon Network HD" group-title="🧸 Infantiles",Cartoon Network HD
-http://190.7.19.197:232/play/a05s/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10965" tvg-name="CARTOON NETWORK HD" group-title="🧸 Infantiles",CARTOON NETWORK HD
-http://190.238.43.117:9000/play/a0hw/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10977" tvg-name="Cartoon Network HD" group-title="🧸 Infantiles",Cartoon Network HD
-http://190.238.43.117:9000/play/a0fv/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10978" tvg-name="Cartoonito" group-title="🧸 Infantiles",Cartoonito
-http://190.238.43.117:9000/play/a0dn/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10966" tvg-name="CARTOONITO HD" group-title="🧸 Infantiles",CARTOONITO HD
-http://190.238.43.117:9000/play/a0ig/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10541" tvg-name="Disney Channel HD" group-title="🧸 Infantiles",Disney Channel HD
-http://190.7.19.197:232/play/a04v/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10999" tvg-name="Disney Channel" group-title="🧸 Infantiles",Disney Channel
-http://190.238.43.117:9000/play/a0gu/index.m3u8
-
 #EXTINF:-1 tvg-id="ch_10744" tvg-name="El Chavo del 8" group-title="🧸 Infantiles",El Chavo del 8
 https://live20.bozztv.com/giatvplayout7/giatv-211465/playlist.m3u8
 
-#EXTINF:-1 tvg-id="ch_10588" tvg-name="Nick Jr" group-title="🧸 Infantiles",Nick Jr
-http://190.7.19.197:232/play/a01n/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10589" tvg-name="Nickelodeon" group-title="🧸 Infantiles",Nickelodeon
-http://190.7.19.197:232/play/a03e/index.m3u8
-
 #EXTINF:-1 tvg-id="ch_10748" tvg-name="Nickelodeon" group-title="🧸 Infantiles",Nickelodeon
 http://179.60.51.134:8888/NICK/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11071" tvg-name="Nickelodeon HD" group-title="🧸 Infantiles",Nickelodeon HD
-http://190.238.43.117:9000/play/a0g6/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10617" tvg-name="TOONCAST" group-title="🧸 Infantiles",TOONCAST
-http://190.7.19.197:232/play/a01w/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11110" tvg-name="Tooncast" group-title="🧸 Infantiles",Tooncast
-http://190.238.43.117:9000/play/a0ev/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10499" tvg-name="A24" group-title="📰 Noticias",A24
-http://190.7.19.197:232/play/a03z/index.m3u8
 
 #EXTINF:-1 tvg-id="A24.ar@SD" tvg-name="A24 (720p)" group-title="📰 Noticias" http-user-agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, como Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",A24 (720p)
 #EXTVLCOPT:http-user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, como Gecko) Chrome/112.0.0.0 Mobile Safari/537.36
@@ -379,112 +40,16 @@ https://g5.vxral-slo.transport.edge-access.net/a12/ngrp:a24-100056_all/playlist.
 #EXTINF:-1 tvg-id="Canal26.ar@SD" tvg-name="Canal 26 (1080p)" group-title="📰 Noticias",Canal 26 (1080p)
 https://stream-gtlc.telecentro.net.ar/hls/canal26hls/main.m3u8
 
-#EXTINF:-1 tvg-id="ch_10513" tvg-name="C5N" group-title="📰 Noticias",C5N
-http://190.7.19.197:232/play/a040/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10521" tvg-name="CNN en Español" group-title="📰 Noticias",CNN en Español
-http://190.7.19.197:232/play/a03j/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10581" tvg-name="La Nacion TV" group-title="📰 Noticias",La Nacion TV
-http://190.7.19.197:232/play/a043/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10504" tvg-name="ANIMAL PLÁNET" group-title="🌎 Documentales",ANIMAL PLÁNET
-http://190.7.19.197:232/play/a081/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10534" tvg-name="Discovery Channel HD" group-title="🌎 Documentales",Discovery Channel HD
-http://190.7.19.197:232/play/a065/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10994" tvg-name="Discovery Channel  HD" group-title="🌎 Documentales",Discovery Channel  HD
-http://190.238.43.117:9000/play/a0gi/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10535" tvg-name="Discovery H&H HD" group-title="🌎 Documentales",Discovery H&H HD
-http://190.7.19.197:232/play/a064/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10537" tvg-name="Discovery Science" group-title="🌎 Documentales",Discovery Science
-http://190.7.19.197:232/play/a04o/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10996" tvg-name="Discovery Science" group-title="🌎 Documentales",Discovery Science
-http://190.238.43.117:9000/play/a0es/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10538" tvg-name="Discovery Theater HD" group-title="🌎 Documentales",Discovery Theater HD
-http://190.7.19.197:232/play/a053/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10997" tvg-name="Discovery Theater HD" group-title="🌎 Documentales",Discovery Theater HD
-http://190.238.43.117:9000/play/a0g0/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10540" tvg-name="Discovery World HD" group-title="🌎 Documentales",Discovery World HD
-http://190.7.19.197:232/play/a055/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10998" tvg-name="Discovery World HD" group-title="🌎 Documentales",Discovery World HD
-http://190.238.43.117:9000/play/a0fo/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11041" tvg-name="HGTV" group-title="🌎 Documentales",HGTV
-http://190.238.43.117:9000/play/a0ew/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10576" tvg-name="History 2" group-title="🌎 Documentales",History 2
-http://190.7.19.197:232/play/a019/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10577" tvg-name="History Channel" group-title="🌎 Documentales",History Channel
-http://190.7.19.197:232/play/a03h/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11045" tvg-name="History Channel HD" group-title="🌎 Documentales",History Channel HD
-http://190.238.43.117:9000/play/a0gj/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10587" tvg-name="Nat Geo HD" group-title="🌎 Documentales",Nat Geo HD
-http://190.7.19.197:232/play/a03s/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_11069" tvg-name="Nat Geo HD" group-title="🌎 Documentales",Nat Geo HD
-http://190.238.43.117:9000/play/a0gk/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10622" tvg-name="The History Channel HD" group-title="🌎 Documentales",The History Channel HD
-http://190.7.19.197:232/play/a03t/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10509" tvg-name="Allegro TV" group-title="🎶 Música",Allegro TV
-http://190.7.19.197:232/play/a098/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10519" tvg-name="CM" group-title="🎶 Música",CM
-http://190.7.19.197:232/play/a094/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10575" tvg-name="HTV" group-title="🎶 Música",HTV
-http://190.7.19.197:232/play/a01a/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10583" tvg-name="MTV" group-title="🎶 Música",MTV
-http://190.7.19.197:232/play/a04q/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10595" tvg-name="Quiero Musica" group-title="🎶 Música",Quiero Musica
-http://190.7.19.197:232/play/a04r/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10609" tvg-name="TCM" group-title="🎶 Música",TCM
-http://190.7.19.197:232/play/a014/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10510" tvg-name="America TV HD" group-title="🧉 Nacionales y Variedades",America TV HD
-http://190.7.19.197:232/play/a03b/index.m3u8
-
 #EXTINF:-1 tvg-id="AmericaTV.ar@SD" tvg-name="America TV (720p)" group-title="🧉 Nacionales y Variedades" http-user-agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, como Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",America TV (720p)
 #EXTVLCOPT:http-user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, como Gecko) Chrome/112.0.0.0 Mobile Safari/537.36
 https://prepublish.f.qaotic.net/a07/americahls-100056/playlist_720p.m3u8
 
-#EXTINF:-1 tvg-id="ch_10556" tvg-name="El Nueve HD" group-title="🧉 Nacionales y Variedades",El Nueve HD
-http://190.7.19.197:232/play/a03k/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10557" tvg-name="El Trece HD" group-title="🧉 Nacionales y Variedades",El Trece HD
-http://190.7.19.197:232/play/a05a/index.m3u8
-
-#EXTINF:-1 tvg-id="ElTrece.ar@SD" tvg-name="El Trece (480p)" group-title="🧉 Nacionales y Variedades",El Trece (480p)
-http://190.108.83.69:8000/play/a01d/index.m3u8
-
 #EXTINF:-1 tvg-id="ElTrece.ar@SD" tvg-name="El Trece (1080p)" group-title="🧉 Nacionales y Variedades",El Trece (1080p)
 #EXTVLCOPT:http-referrer=https://vodgc.net
 https://livetrx01.vodgc.net/eltrecetv/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10621" tvg-name="Telefe HD" group-title="🧉 Nacionales y Variedades",Telefe HD
-http://190.7.19.197:232/play/a059/index.m3u8
 
 #EXTINF:-1 tvg-id="TelefeBuenosAires.ar@SD" tvg-name="Telefe Buenos Aires (1080p)" group-title="🧉 Nacionales y Variedades",Telefe Buenos Aires (1080p)
 http://45.134.141.161:2200/ARG/TELEFE_HD/index.m3u8
 
 #EXTINF:-1 tvg-id="TelefeInternacional.ar@SD" tvg-name="Telefe Internacional (576p)" group-title="🧉 Nacionales y Variedades",Telefe Internacional (576p)
 http://190.108.83.69:8000/play/a08l/index.m3u8
-
-#EXTINF:-1 tvg-id="ch_10618" tvg-name="TV Publica HD" group-title="🧉 Nacionales y Variedades",TV Publica HD
-http://190.7.19.197:232/play/a03c/index.m3u8
