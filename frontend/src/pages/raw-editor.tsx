@@ -1,9 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
-import { FileCode, Download, RefreshCw, Check, Loader2, AlertTriangle } from 'lucide-react'
-import { PageHeader } from '@/components/layout/page-header'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { Loader2 } from 'lucide-react'
+import { PageHeader } from '@/components/shared/page-header'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { api } from '@/lib/api'
 import { toast } from 'sonner'
 
@@ -13,6 +11,8 @@ export default function RawEditorPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const originalRef = useRef('')
+  const gutterRef = useRef<HTMLDivElement>(null)
+  const [justSaved, setJustSaved] = useState(false)
 
   const loadContent = async () => {
     setIsLoading(true)
@@ -21,6 +21,7 @@ export default function RawEditorPage() {
       setContent(text)
       originalRef.current = text
       setIsDirty(false)
+      setJustSaved(false)
     } catch {
       toast.error('Error al cargar el M3U')
     } finally {
@@ -34,6 +35,7 @@ export default function RawEditorPage() {
 
   const handleChange = (value: string) => {
     setContent(value)
+    setJustSaved(false)
     setIsDirty(value !== originalRef.current)
   }
 
@@ -52,6 +54,7 @@ export default function RawEditorPage() {
       toast.success(`Cambios aplicados. ${res.activeChannels} canales activos.`)
       originalRef.current = content
       setIsDirty(false)
+      setJustSaved(true)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al aplicar cambios')
     } finally {
@@ -71,60 +74,158 @@ export default function RawEditorPage() {
     URL.revokeObjectURL(url)
   }
 
-  const lineCount = content.split('\n').length
+  const lines = useMemo(() => content.split('\n'), [content])
+  const lineCount = lines.length
+  const gutter = useMemo(() => lines.map((_, i) => i + 1).join('\n'), [lines])
+
+  const stats = useMemo(() => {
+    let entries = 0
+    let orphan = 0
+    let noLogo = 0
+    lines.forEach((l, i) => {
+      if (!l.startsWith('#EXTINF')) return
+      entries++
+      if (!(lines[i + 1] ?? '').trim().match(/^[a-z]+:\/\//i)) orphan++
+      if (!l.includes('tvg-logo')) noLogo++
+    })
+    const header = lines[0]?.trimStart().toLowerCase().startsWith('#extm3u') ?? false
+    const hasEpg = header && /x-tvg-url|url-tvg/i.test(lines[0])
+    return { entries, orphan, noLogo, header, hasEpg }
+  }, [lines])
+
+  const checks = [
+    {
+      title: 'Cabecera #EXTM3U',
+      detail: stats.header ? (stats.hasEpg ? 'Presente, con guía EPG' : 'Presente') : 'Falta en la primera línea',
+      color: stats.header ? '#5AD1A0' : '#FF7A6B',
+    },
+    { title: `${stats.entries.toLocaleString('es-AR')} canales`, detail: 'Cada #EXTINF con su URL', color: stats.orphan ? '#FF7A6B' : '#5AD1A0' },
+    {
+      title: stats.orphan ? `${stats.orphan} entradas sin URL` : 'Sin entradas huérfanas',
+      detail: stats.orphan ? 'Revisá la línea siguiente a cada #EXTINF' : 'Todo en orden',
+      color: stats.orphan ? '#FF7A6B' : '#5AD1A0',
+    },
+    {
+      title: `${stats.noLogo.toLocaleString('es-AR')} canales sin logo`,
+      detail: 'TiviMate mostrará el nombre en su lugar',
+      color: stats.noLogo ? '#F2C14E' : '#5AD1A0',
+    },
+  ]
+
+  // Ctrl/Cmd+S guarda
+  const saveRef = useRef(handleSave)
+  saveRef.current = handleSave
+  const canSaveRef = useRef(false)
+  canSaveRef.current = isDirty && !isSaving && !isLoading
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        if (canSaveRef.current) saveRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const statusLine = justSaved
+    ? 'GUARDADO · PLAYLIST REGENERADA'
+    : isDirty
+      ? 'CAMBIOS SIN GUARDAR'
+      : 'SINCRONIZADO CON LA PLAYLIST'
+  const statusColor = justSaved ? '#5AD1A0' : isDirty ? '#F2A33A' : '#8A929B'
 
   return (
-    <div className="flex flex-col gap-4 h-full">
+    <>
       <PageHeader
         title="Editor Raw M3U"
-        subtitle="Edición directa de la playlist generada"
-        icon={FileCode}
+        subtitle="Edición directa de la playlist generada. Los cambios se aplican al guardar."
+        status={statusLine}
+        statusColor={statusColor}
         actions={
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">{lineCount} líneas</span>
-            <Button variant="outline" size="sm" onClick={handleDownload} disabled={isLoading}>
-              <Download className="w-4 h-4 mr-2" />
+          <>
+            <Button variant="secondary" onClick={handleDownload} disabled={isLoading}>
               Descargar .m3u
             </Button>
-            <Button variant="outline" size="sm" onClick={loadContent} disabled={isLoading}>
-              <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+            <Button variant="secondary" onClick={loadContent} disabled={isLoading}>
+              {isLoading && <Loader2 aria-hidden="true" className="animate-spin" />}
               Recargar
             </Button>
-            <Button size="sm" onClick={handleSave} disabled={isSaving || isLoading || !isDirty}>
-              {isSaving ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Check className="w-4 h-4 mr-2" />
-              )}
-              Aplicar cambios{isDirty ? ' *' : ''}
+            <Button onClick={handleSave} disabled={isSaving || isLoading || !isDirty}>
+              {isSaving && <Loader2 aria-hidden="true" className="animate-spin" />}
+              Guardar cambios
             </Button>
-          </div>
+          </>
         }
       />
 
-      <Alert className="border-amber-500/30 bg-amber-500/10 text-amber-400">
-        <AlertTriangle className="h-4 w-4 text-amber-400" />
-        <AlertDescription className="text-amber-400/90 text-xs">
-          Los cambios en este editor modifican la base de datos directamente. Canales nuevos se crean, editados se actualizan, y eliminados se desactivan.
-        </AlertDescription>
-      </Alert>
+      <p className="rounded-[10px] border border-border bg-card px-4 py-3 text-[13px] text-muted-foreground">
+        <span className="mr-2 font-mono text-degraded">AVISO</span>
+        Los cambios en este editor modifican la base de datos directamente: los canales nuevos se crean, los editados se actualizan y los eliminados se desactivan.
+      </p>
 
-      <div className="flex-1 min-h-0">
-        {isLoading ? (
-          <div className="h-[500px] rounded-xl border border-border bg-[hsl(240_10%_4%)] animate-pulse" />
-        ) : (
-          <Textarea
-            value={content}
-            onChange={(e) => handleChange(e.target.value)}
-            className="h-[calc(100vh-300px)] min-h-[500px] font-mono text-xs resize-none bg-[hsl(240_10%_4%)] border-border/60 focus:border-primary/50"
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            placeholder="#EXTM3U&#10;#EXTINF:-1 tvg-name=&quot;Canal&quot;,Canal&#10;http://..."
-          />
-        )}
+      <div className="flex flex-wrap items-start gap-[22px]">
+        <section aria-label="Editor" className="flex min-w-0 flex-[3_1_560px] flex-col overflow-hidden rounded-[10px] border border-border bg-[#0B0D0F]">
+          <div className="flex items-center justify-between border-b border-border bg-card px-3.5 py-2.5 font-mono text-xs text-muted-foreground">
+            <span>playlist.m3u</span>
+            <span>UTF-8 · LF · {lineCount.toLocaleString('es-AR')} líneas</span>
+          </div>
+          {isLoading ? (
+            <div className="h-[640px] animate-pulse bg-[#0B0D0F]" />
+          ) : (
+            <div className="flex h-[640px]">
+              <div
+                ref={gutterRef}
+                aria-hidden="true"
+                className="shrink-0 overflow-hidden border-r border-[#1B1F24] bg-background px-2.5 py-3.5 text-right font-mono text-[13px] leading-[22px] whitespace-pre text-[#4A525B] select-none"
+              >
+                {gutter}
+              </div>
+              <textarea
+                aria-label="Contenido de la playlist"
+                value={content}
+                onChange={(e) => handleChange(e.target.value)}
+                onScroll={(e) => {
+                  if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop
+                }}
+                wrap="off"
+                spellCheck={false}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                placeholder={'#EXTM3U\n#EXTINF:-1 tvg-name="Canal",Canal\nhttp://...'}
+                className="min-w-0 flex-1 resize-none overflow-auto border-0 bg-transparent px-4 py-3.5 font-mono text-[13px] leading-[22px] whitespace-pre text-[#C9CED4] outline-none [tab-size:2]"
+              />
+            </div>
+          )}
+          <div className="flex flex-wrap gap-x-[18px] gap-y-1.5 border-t border-border bg-card px-3.5 py-2 font-mono text-[11px] text-label">
+            <span>{stats.entries.toLocaleString('es-AR')} entradas</span>
+            <span>{(stats.orphan + stats.noLogo).toLocaleString('es-AR')} advertencias</span>
+            <span className="ml-auto">Ctrl+S para guardar</span>
+          </div>
+        </section>
+
+        <aside aria-label="Resumen" className="flex min-w-0 flex-[1_1_260px] flex-col gap-3.5">
+          <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-card p-4">
+            <h2 className="text-[15px] font-bold">Validación</h2>
+            {checks.map((c, i) => (
+              <div key={i} className="flex items-start gap-2.5 text-[13px]">
+                <span aria-hidden="true" className="mt-[5px] size-2 shrink-0 rounded-full" style={{ background: c.color }} />
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-semibold">{c.title}</span>
+                  <span className="text-label">{c.detail}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-col gap-2.5 rounded-[10px] border border-border bg-card p-4">
+            <h2 className="text-[15px] font-bold">Atributos soportados</h2>
+            <span className="font-mono text-xs leading-[1.8] text-muted-foreground">
+              tvg-id · tvg-name · tvg-logo · group-title · catchup · catchup-days · catchup-source · http-user-agent · http-referrer
+            </span>
+          </div>
+        </aside>
       </div>
-    </div>
+    </>
   )
 }

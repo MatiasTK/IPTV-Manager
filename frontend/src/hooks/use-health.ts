@@ -25,7 +25,7 @@ export function useHealthChannels() {
 export function useCheckNow() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: () => api.post('/api/health/check-now'),
+    mutationFn: (sourceId: number | void) => api.post('/api/health/check-now', sourceId ? { sourceId } : undefined),
     onSuccess: () => {
       setTimeout(() => {
         qc.invalidateQueries({ queryKey: ['health'] })
@@ -35,10 +35,19 @@ export function useCheckNow() {
   })
 }
 
-export function useDuplicates(threshold: number) {
+export function useCancelCheck() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post('/api/health/cancel'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['health'] }),
+  })
+}
+
+export function useDuplicates(threshold: number, opts: { enabled?: boolean; staleTime?: number } = {}) {
   return useQuery({
     queryKey: ['duplicates', threshold],
     queryFn: () => api.get<DuplicatesResponse>(`/api/channels/duplicates?threshold=${threshold}`),
-    staleTime: 0,
+    staleTime: opts.staleTime ?? 0,
+    enabled: opts.enabled ?? true,
   })
 }

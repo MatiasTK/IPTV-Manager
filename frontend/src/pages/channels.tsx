@@ -1,17 +1,17 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
-  Radio, Plus, Search, Pencil, Trash2, Link, Activity, Loader2, Tv, RotateCcw,
-  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+  Radio, Plus, Search, Pencil, Trash2, Link, Activity, Loader2, RotateCcw, ArrowUp, ArrowDown, ArrowUpDown, ChevronsLeft, ChevronsRight,
 } from 'lucide-react'
-import { PageHeader } from '@/components/layout/page-header'
-import { StatCard } from '@/components/shared/stat-card'
-import { HealthBadge } from '@/components/shared/health-badge'
+import { PageHeader } from '@/components/shared/page-header'
+import { StatStrip } from '@/components/shared/stat-strip'
+import { FilterChips } from '@/components/shared/filter-chips'
+import { StatusLabel } from '@/components/shared/health-badge'
+import { LatencyBar } from '@/components/shared/latency-bar'
 import { EmptyState } from '@/components/shared/empty-state'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { ChannelFormDialog } from '@/components/channels/channel-form-dialog'
 import { AlternativesDialog } from '@/components/channels/alternatives-dialog'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import {
@@ -27,7 +27,6 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MoreHorizontal } from 'lucide-react'
@@ -37,8 +36,8 @@ import {
 } from '@/hooks/use-channels'
 import { useGroups } from '@/hooks/use-groups'
 import { useSources } from '@/hooks/use-sources'
-import { useHealthStatus } from '@/hooks/use-health'
-import { formatLatency } from '@/lib/utils'
+import { useHealthStatus, useCheckNow } from '@/hooks/use-health'
+import { cn, formatLatency, formatRelativeDate } from '@/lib/utils'
 import type { Channel, ChannelFilters, HealthStatus } from '@/lib/types'
 import { toast } from 'sonner'
 
@@ -60,8 +59,28 @@ function SortIndicator({ field, sortBy, sortOrder }: {
   sortBy: string
   sortOrder: 'asc' | 'desc'
 }) {
-  if (sortBy !== field) return <span className="ml-1 text-muted-foreground/40">↕</span>
-  return <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+  if (sortBy !== field) return <ArrowUpDown aria-hidden="true" className="size-3 opacity-40" />
+  return sortOrder === 'asc'
+    ? <ArrowUp aria-hidden="true" className="size-3 text-foreground" />
+    : <ArrowDown aria-hidden="true" className="size-3 text-foreground" />
+}
+
+function SortHead({ field, label, sortBy, sortOrder, onSort }: {
+  field: NonNullable<ChannelFilters['sortBy']>
+  label: string
+  sortBy: string
+  sortOrder: 'asc' | 'desc'
+  onSort: (f: NonNullable<ChannelFilters['sortBy']>) => void
+}) {
+  const ariaSort = sortBy === field ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'
+  return (
+    <TableHead aria-sort={ariaSort}>
+      <button type="button" onClick={() => onSort(field)} className="inline-flex items-center gap-1.5 uppercase hover:text-foreground">
+        {label}
+        <SortIndicator field={field} sortBy={sortBy} sortOrder={sortOrder} />
+      </button>
+    </TableHead>
+  )
 }
 
 export default function ChannelsPage() {
@@ -140,6 +159,7 @@ export default function ChannelsPage() {
   const deleteChannel   = useDeleteChannel()
   const toggleChannel   = useToggleChannel()
   const checkHealth     = useCheckChannelHealth()
+  const checkNow        = useCheckNow()
   const bulkDelete      = useBulkDeleteChannels()
   const bulkToggle      = useBulkToggleChannels()
   const bulkEditGroup   = useBulkEditChannelsGroup()
@@ -238,219 +258,203 @@ export default function ChannelsPage() {
 
   const hasActiveFilters = !!(debouncedSearch || groupFilter !== 'all' || sourceFilter !== 'all' || healthFilter !== 'all')
 
-  // ── Pagination component ────────────────────────────────────────────────
-  const Pagination = () => (
-    <div className="flex items-center justify-between px-4 py-3 border-t border-border">
-      <span className="text-xs text-muted-foreground">
-        {total === 0 ? 'Sin resultados' : (
-          <>
-            Mostrando {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} de{' '}
-            <span className="font-medium text-foreground">{total.toLocaleString()}</span> canales
-          </>
-        )}
-      </span>
-      <div className="flex items-center gap-1">
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(1)} disabled={page === 1}>
-          <ChevronsLeft className="w-3.5 h-3.5" />
-        </Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(p => p - 1)} disabled={page === 1}>
-          <ChevronLeft className="w-3.5 h-3.5" />
-        </Button>
-        <span className="text-xs px-2 text-muted-foreground">
-          Pág. {page} / {totalPages}
-        </span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(p => p + 1)} disabled={page >= totalPages}>
-          <ChevronRight className="w-3.5 h-3.5" />
-        </Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(totalPages)} disabled={page >= totalPages}>
-          <ChevronsRight className="w-3.5 h-3.5" />
-        </Button>
-      </div>
-    </div>
-  )
+  const searchRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (e.key === '/' && !(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))) {
+        e.preventDefault()
+        searchRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const handleCheckAll = async () => {
+    try {
+      await checkNow.mutateAsync()
+      toast.success('Verificación iniciada')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al iniciar la verificación')
+    }
+  }
+
+  const lastCheck = healthData?.lastCheckAt ?? null
+  const checking = healthData?.isChecking || checkNow.isPending
+  const statusLine = checking
+    ? `VERIFICANDO ${(summary?.total ?? total).toLocaleString('es-AR')} CANALES…`
+    : lastCheck
+      ? `ÚLTIMO CHEQUEO ${formatRelativeDate(lastCheck).toUpperCase()}`
+      : 'SIN CHEQUEOS TODAVÍA'
+
+  const pct = (n: number) => (summary && summary.total > 0 ? Math.round((n / summary.total) * 100) : 0)
+  const stats = [
+    { key: 'total', label: 'Total', value: summary?.total ?? total, note: 'activos', color: '#E7E9EC', pct: 100 },
+    { key: 'healthy', label: 'Online', value: summary?.healthy ?? 0, note: `${pct(summary?.healthy ?? 0)}%`, color: '#5AD1A0', pct: pct(summary?.healthy ?? 0) },
+    { key: 'degraded', label: 'Degradados', value: summary?.degraded ?? 0, note: '> 1500 ms', color: '#F2C14E', pct: pct(summary?.degraded ?? 0) },
+    { key: 'down', label: 'Caídos', value: summary?.down ?? 0, note: `${pct(summary?.down ?? 0)}%`, color: '#FF7A6B', pct: pct(summary?.down ?? 0) },
+  ]
+
+  const healthChips = [
+    { value: 'all', label: 'Todos', count: summary?.total },
+    { value: 'healthy', label: 'Online', count: summary?.healthy },
+    { value: 'degraded', label: 'Degradados', count: summary?.degraded },
+    { value: 'intermittent', label: 'Intermitentes', count: summary?.intermittent },
+    { value: 'down', label: 'Caídos', count: summary?.down },
+    { value: 'unknown', label: 'Sin dato', count: summary?.unknown },
+  ]
+
+  const rangeText = total === 0
+    ? 'Sin resultados'
+    : `${((page - 1) * PAGE_SIZE + 1).toLocaleString('es-AR')}–${Math.min(page * PAGE_SIZE, total).toLocaleString('es-AR')} de ${total.toLocaleString('es-AR')}`
+
+  const bulkBtn = 'h-9 rounded-[7px] px-3 text-[13px]'
 
   return (
-    <div>
+    <>
       <PageHeader
         title="Canales"
-        subtitle="Gestión de canales de tu lista IPTV"
-        icon={Radio}
+        status={statusLine}
         actions={
-          <Button onClick={() => { setEditChannel(null); setFormOpen(true) }}>
-            <Plus className="w-4 h-4 mr-2" />
-            Agregar canal
-          </Button>
+          <>
+            <Button variant="secondary" onClick={handleCheckAll} disabled={checking}>
+              {checking && <Loader2 className="animate-spin" aria-hidden="true" />}
+              Verificar todo
+            </Button>
+            <Button onClick={() => { setEditChannel(null); setFormOpen(true) }}>
+              <Plus aria-hidden="true" />
+              Nuevo canal
+            </Button>
+          </>
         }
       />
 
-      {/* Stats — use server total, not channels.length */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        <StatCard icon={Radio}    label="Total"      value={total}                  color="purple" />
-        <StatCard icon={Activity} label="Saludables" value={summary?.healthy  ?? 0} color="green"  />
-        <StatCard icon={Activity} label="Lentos"     value={summary?.degraded ?? 0} color="amber"  />
-        <StatCard icon={Activity} label="Caídos"     value={summary?.down     ?? 0} color="red"    />
+      <StatStrip
+        items={stats}
+        className="grid-cols-[repeat(auto-fit,minmax(180px,1fr))]"
+      />
+
+      {/* Filtros */}
+      <div className="flex flex-wrap items-center gap-2.5">
+        <label className="flex h-11 min-w-[240px] flex-[1_1_280px] items-center gap-2.5 rounded-lg border border-control bg-card px-3.5 hover:border-control-strong focus-within:border-control-strong">
+          <Search aria-hidden="true" className="size-4 shrink-0 text-label" />
+          <span className="sr-only">Buscar canales</span>
+          <input
+            ref={searchRef}
+            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
+            placeholder="Buscar por nombre, tvg-id o grupo"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+          <kbd className="rounded border border-control px-1.5 py-0.5 font-mono text-[11px] text-label">/</kbd>
+        </label>
+        <Select value={groupFilter} onValueChange={setGroupFilter}>
+          <SelectTrigger aria-label="Grupo" className="w-44"><SelectValue placeholder="Todos los grupos" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos los grupos</SelectItem>
+            {groupsData?.groups.map((g) => (
+              <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
+            ))}
+            <SelectItem value="none">Sin grupo</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={sourceFilter} onValueChange={setSourceFilter}>
+          <SelectTrigger aria-label="Fuente" className="w-44"><SelectValue placeholder="Todas las fuentes" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todas las fuentes</SelectItem>
+            {sourcesData?.sources.map((s) => (
+              <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {(sortBy || hasActiveFilters) && (
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setSortBy(undefined)
+              setSortOrder('asc')
+              setSearchInput('')
+              setGroupFilter('all')
+              setSourceFilter('all')
+              setHealthFilter('all')
+            }}
+          >
+            <RotateCcw aria-hidden="true" />
+            Limpiar filtros
+          </Button>
+        )}
       </div>
+      <FilterChips label="Estado" options={healthChips} value={healthFilter} onChange={setHealthFilter} />
 
-      {/* Bulk actions bar / Filters */}
-      {selectedIds.size > 0 ? (
-        <div className="space-y-0 mb-4">
-          {/* Bulk toolbar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-muted/40 border border-border rounded-t-xl animate-in fade-in slide-in-from-top-1 duration-200">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-foreground">
-                {allPagesSelected
-                  ? `${selectedIds.size.toLocaleString()} canales seleccionados (todos)`
-                  : `${selectedIds.size.toLocaleString()} ${selectedIds.size === 1 ? 'canal seleccionado' : 'canales seleccionados'}`}
-              </span>
-              <Button variant="ghost" size="sm" onClick={clearSelection} className="text-xs h-8 text-muted-foreground hover:text-foreground">
-                Deseleccionar todo
-              </Button>
-            </div>
-            <div className="flex items-center gap-2">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm">Alternar estado</Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                  <DropdownMenuItem onClick={() => handleBulkToggle(1)}>Activar seleccionados</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleBulkToggle(0)}>Desactivar seleccionados</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleBulkToggle()}>Invertir estado</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Button variant="outline" size="sm" onClick={() => setBulkEditOpen(true)}>Editar grupo</Button>
-              <Button variant="destructive" size="sm" onClick={() => setBulkDeleteOpen(true)}>
-                <Trash2 className="w-4 h-4 mr-2" />
-                Eliminar
-              </Button>
-            </div>
+      {/* Barra de selección */}
+      {selectedIds.size > 0 && (
+        <div className="overflow-hidden rounded-[10px] border border-control bg-raised text-[13px]">
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2.5 px-3.5 py-2.5">
+            <span className="font-mono text-primary">
+              {allPagesSelected
+                ? `${selectedIds.size.toLocaleString('es-AR')} seleccionados (todos)`
+                : `${selectedIds.size.toLocaleString('es-AR')} ${selectedIds.size === 1 ? 'seleccionado' : 'seleccionados'}`}
+            </span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" className={bulkBtn}>Alternar estado</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem onClick={() => handleBulkToggle(1)}>Activar seleccionados</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleBulkToggle(0)}>Desactivar seleccionados</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleBulkToggle()}>Invertir estado</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="secondary" className={bulkBtn} onClick={() => setBulkEditOpen(true)}>Mover a grupo</Button>
+            <Button variant="destructive" className={bulkBtn} onClick={() => setBulkDeleteOpen(true)}>
+              <Trash2 aria-hidden="true" />
+              Eliminar
+            </Button>
+            <Button variant="ghost" className={cn(bulkBtn, 'ml-auto')} onClick={clearSelection}>Limpiar</Button>
           </div>
-
-          {/* "Select all pages" banner — GitHub style */}
           {pageAllSelected && !allPagesSelected && total > PAGE_SIZE && (
-            <div className="flex items-center justify-center gap-2 px-4 py-2 bg-primary/5 border border-t-0 border-border rounded-b-xl text-sm animate-in fade-in duration-150">
-              <span className="text-muted-foreground">
-                Los {pageIds.length} canales de esta página están seleccionados.
-              </span>
-              <Button
-                variant="link"
-                size="sm"
-                className="h-auto p-0 text-primary font-medium"
-                onClick={() => setFetchAllIds(true)}
-                disabled={idsFetching}
-              >
+            <div className="flex flex-wrap items-center justify-center gap-2 border-t border-border bg-card px-4 py-2">
+              <span className="text-muted-foreground">Los {pageIds.length} canales de esta página están seleccionados.</span>
+              <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setFetchAllIds(true)} disabled={idsFetching}>
                 {idsFetching
-                  ? <><Loader2 className="w-3 h-3 mr-1 animate-spin" />Cargando...</>
-                  : `Seleccionar los ${total.toLocaleString()} canales que coinciden con los filtros`}
+                  ? <><Loader2 className="animate-spin" aria-hidden="true" />Cargando...</>
+                  : `Seleccionar los ${total.toLocaleString('es-AR')} canales que coinciden con los filtros`}
               </Button>
             </div>
           )}
           {allPagesSelected && (
-            <div className="flex items-center justify-center gap-2 px-4 py-2 bg-primary/5 border border-t-0 border-border rounded-b-xl text-sm animate-in fade-in duration-150">
+            <div className="flex flex-wrap items-center justify-center gap-2 border-t border-border bg-card px-4 py-2">
               <span className="text-muted-foreground">
-                Todos los <span className="font-medium text-foreground">{selectedIds.size.toLocaleString()}</span> canales están seleccionados.
+                Todos los <span className="font-medium text-foreground">{selectedIds.size.toLocaleString('es-AR')}</span> canales están seleccionados.
               </span>
-              <Button variant="link" size="sm" className="h-auto p-0 text-primary font-medium" onClick={clearSelection}>
-                Cancelar selección
-              </Button>
+              <Button variant="link" size="sm" className="h-auto p-0" onClick={clearSelection}>Cancelar selección</Button>
             </div>
-          )}
-        </div>
-      ) : (
-        /* Filters */
-        <div className="flex flex-wrap gap-3 mb-4">
-          <div className="relative flex-1 min-w-48">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              className="pl-9"
-              placeholder="Buscar canal..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-            />
-          </div>
-          <Select value={groupFilter} onValueChange={setGroupFilter}>
-            <SelectTrigger className="w-44"><SelectValue placeholder="Todos los grupos" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todos los grupos</SelectItem>
-              {groupsData?.groups.map((g) => (
-                <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
-              ))}
-              <SelectItem value="none">Sin grupo</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={sourceFilter} onValueChange={setSourceFilter}>
-            <SelectTrigger className="w-44"><SelectValue placeholder="Todas las fuentes" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas las fuentes</SelectItem>
-              {sourcesData?.sources.map((s) => (
-                <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={healthFilter} onValueChange={setHealthFilter}>
-            <SelectTrigger className="w-44"><SelectValue placeholder="Todos los estados" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todos los estados</SelectItem>
-              <SelectItem value="healthy">Saludable</SelectItem>
-              <SelectItem value="degraded">Lento</SelectItem>
-              <SelectItem value="intermittent">Intermitente</SelectItem>
-              <SelectItem value="down">Caído</SelectItem>
-              <SelectItem value="unknown">Desconocido</SelectItem>
-            </SelectContent>
-          </Select>
-          {(sortBy || hasActiveFilters) && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setSortBy(undefined)
-                setSortOrder('asc')
-                setSearchInput('')
-                setGroupFilter('all')
-                setSourceFilter('all')
-                setHealthFilter('all')
-              }}
-              className="h-10 text-xs px-3 border border-dashed border-primary/50 text-primary hover:bg-primary/5 hover:text-primary flex items-center gap-1.5"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Limpiar filtros
-            </Button>
           )}
         </div>
       )}
 
-      {/* Table */}
-      <div className="rounded-xl border border-border bg-card overflow-hidden">
-        {/* Subtle loading indicator that doesn't replace the table */}
-        {isFetching && !isLoading && (
-          <div className="h-0.5 bg-primary/20 animate-pulse" />
-        )}
-        <Table>
+      {/* Tabla */}
+      <div className="overflow-hidden rounded-[10px] border border-border bg-card">
+        {isFetching && !isLoading && <div className="h-0.5 animate-pulse bg-active" />}
+        <Table className="min-w-[900px]">
           <TableHeader>
-            <TableRow className="hover:bg-transparent border-border">
+            <TableRow className="hover:bg-transparent">
               <TableHead className="w-12">
                 <Checkbox
+                  aria-label="Seleccionar todos los canales de la página"
                   checked={pageAllSelected ? true : pageSomeSelected ? 'indeterminate' : false}
                   onCheckedChange={handleHeaderCheckbox}
                 />
               </TableHead>
-              <TableHead className="cursor-pointer select-none hover:text-foreground transition-colors" onClick={() => handleSort('name')}>
-                <div className="flex items-center">Canal <SortIndicator field="name" sortBy={sortBy ?? ''} sortOrder={sortOrder} /></div>
-              </TableHead>
-              <TableHead className="cursor-pointer select-none hover:text-foreground transition-colors" onClick={() => handleSort('group')}>
-                <div className="flex items-center">Grupo <SortIndicator field="group" sortBy={sortBy ?? ''} sortOrder={sortOrder} /></div>
-              </TableHead>
-              <TableHead className="cursor-pointer select-none hover:text-foreground transition-colors" onClick={() => handleSort('source')}>
-                <div className="flex items-center">Fuente <SortIndicator field="source" sortBy={sortBy ?? ''} sortOrder={sortOrder} /></div>
-              </TableHead>
-              <TableHead className="cursor-pointer select-none hover:text-foreground transition-colors" onClick={() => handleSort('status')}>
-                <div className="flex items-center">Estado <SortIndicator field="status" sortBy={sortBy ?? ''} sortOrder={sortOrder} /></div>
-              </TableHead>
-              <TableHead className="cursor-pointer select-none hover:text-foreground transition-colors" onClick={() => handleSort('latency')}>
-                <div className="flex items-center">Latencia <SortIndicator field="latency" sortBy={sortBy ?? ''} sortOrder={sortOrder} /></div>
-              </TableHead>
-              <TableHead className="w-16">Alt.</TableHead>
-              <TableHead className="w-16">Activo</TableHead>
-              <TableHead className="w-12" />
+              <SortHead field="name" label="Canal" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
+              <SortHead field="group" label="Grupo" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
+              <SortHead field="source" label="Fuente" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
+              <SortHead field="status" label="Estado" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
+              <SortHead field="latency" label="Latencia" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
+              <TableHead className="w-16 text-right">Alt.</TableHead>
+              <TableHead className="w-20">Activo</TableHead>
+              <TableHead className="w-14"><span className="sr-only">Acciones</span></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -463,94 +467,114 @@ export default function ChannelsPage() {
                 </TableRow>
               ))
             ) : channels.length === 0 ? (
-              <TableRow>
+              <TableRow className="hover:bg-transparent">
                 <TableCell colSpan={9}>
                   <EmptyState
                     icon={Radio}
                     title="No hay canales"
-                    description={hasActiveFilters ? 'Ningún canal coincide con los filtros activos.' : 'Importá una lista M3U o creá canales manualmente.'}
+                    description={hasActiveFilters ? 'No hay canales que coincidan con la búsqueda.' : 'Importá una lista M3U o creá canales manualmente.'}
                   />
                 </TableCell>
               </TableRow>
             ) : (
-              channels.map((channel) => (
-                <TableRow key={channel.id} className={channel.is_active === 0 ? 'opacity-50' : ''}>
-                  <TableCell>
-                    <Checkbox
-                      checked={selectedIds.has(channel.id)}
-                      onCheckedChange={(c) => handleRowCheckbox(channel.id, c)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      {!channel.tvg_logo || brokenLogos[channel.id] ? (
-                        <div className="w-7 h-7 rounded bg-muted flex items-center justify-center flex-shrink-0">
-                          <Tv className="w-3.5 h-3.5 text-muted-foreground" />
+              channels.map((channel) => {
+                const status = channel.health_status as HealthStatus
+                const selected = selectedIds.has(channel.id)
+                return (
+                  <TableRow
+                    key={channel.id}
+                    data-state={selected ? 'selected' : undefined}
+                    className={cn(selected && 'bg-[#17191D]', channel.is_active === 0 && 'opacity-50')}
+                  >
+                    <TableCell>
+                      <Checkbox
+                        aria-label={`Seleccionar ${channel.name}`}
+                        checked={selected}
+                        onCheckedChange={(c) => handleRowCheckbox(channel.id, c)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        {!channel.tvg_logo || brokenLogos[channel.id] ? (
+                          <div className="flex size-[34px] shrink-0 items-center justify-center rounded-md bg-muted font-mono text-[11px] text-[#C9CED4]">
+                            {channel.name.slice(0, 3).toUpperCase()}
+                          </div>
+                        ) : (
+                          <img
+                            src={`/api/channels/logo-proxy?url=${encodeURIComponent(channel.tvg_logo)}`}
+                            alt=""
+                            referrerPolicy="no-referrer"
+                            className="size-[34px] shrink-0 rounded-md bg-muted object-contain"
+                            onError={() => setBrokenLogos((prev) => ({ ...prev, [channel.id]: true }))}
+                          />
+                        )}
+                        <div className="flex min-w-0 flex-col">
+                          <span className="font-semibold">{channel.name}</span>
+                          {channel.tvg_id && <span className="font-mono text-[11px] text-[#7C838C]">{channel.tvg_id}</span>}
                         </div>
-                      ) : (
-                        <img
-                          src={`/api/channels/logo-proxy?url=${encodeURIComponent(channel.tvg_logo)}`}
-                          alt=""
-                          referrerPolicy="no-referrer"
-                          className="w-7 h-7 rounded object-contain flex-shrink-0 bg-muted"
-                          onError={() => setBrokenLogos((prev) => ({ ...prev, [channel.id]: true }))}
-                        />
-                      )}
-                      <span className="font-medium text-sm">{channel.name}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{channel.group_name ?? '—'}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {channel.source_name ? (
-                      <Badge variant="outline" className="font-normal text-xs text-muted-foreground bg-muted/30 border-muted-foreground/20 max-w-[120px] truncate" title={channel.source_name}>
-                        {channel.source_name}
-                      </Badge>
-                    ) : (
-                      <span className="text-xs text-muted-foreground italic">Manual</span>
-                    )}
-                  </TableCell>
-                  <TableCell><HealthBadge status={channel.health_status as HealthStatus} /></TableCell>
-                  <TableCell className="text-sm font-mono text-muted-foreground">{formatLatency(channel.health_latency_ms)}</TableCell>
-                  <TableCell>
-                    {channel.alt_count > 0 ? (
-                      <Badge variant="secondary" className="text-xs font-mono">+{channel.alt_count}</Badge>
-                    ) : (
-                      <span className="text-muted-foreground text-sm">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Switch checked={channel.is_active === 1} onCheckedChange={() => handleToggle(channel)} />
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <MoreHorizontal className="w-4 h-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => { setEditChannel(channel); setFormOpen(true) }}>
-                          <Pencil className="w-4 h-4 mr-2" />Editar
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setAltChannel(channel)}>
-                          <Link className="w-4 h-4 mr-2" />Alternativas
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleCheck(channel)}>
-                          <Activity className="w-4 h-4 mr-2" />Verificar
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeleteTarget(channel)}>
-                          <Trash2 className="w-4 h-4 mr-2" />Eliminar
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-[#C9CED4]">{channel.group_name ?? '—'}</TableCell>
+                    <TableCell className="max-w-[180px] truncate text-muted-foreground" title={channel.source_name ?? undefined}>
+                      {channel.source_name ?? <span className="italic">Manual</span>}
+                    </TableCell>
+                    <TableCell><StatusLabel status={status} /></TableCell>
+                    <TableCell><LatencyBar status={status} ms={channel.health_latency_ms} /></TableCell>
+                    <TableCell className="text-right font-mono text-muted-foreground">
+                      {channel.alt_count > 0 ? `+${channel.alt_count}` : '—'}
+                    </TableCell>
+                    <TableCell>
+                      <Switch
+                        aria-label={`${channel.is_active === 1 ? 'Desactivar' : 'Activar'} ${channel.name}`}
+                        checked={channel.is_active === 1}
+                        onCheckedChange={() => handleToggle(channel)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon-sm" aria-label={`Acciones de ${channel.name}`}>
+                            <MoreHorizontal aria-hidden="true" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => { setEditChannel(channel); setFormOpen(true) }}>
+                            <Pencil className="mr-2 size-4" />Editar
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setAltChannel(channel)}>
+                            <Link className="mr-2 size-4" />Alternativas
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleCheck(channel)}>
+                            <Activity className="mr-2 size-4" />Verificar
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeleteTarget(channel)}>
+                            <Trash2 className="mr-2 size-4" />Eliminar
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                )
+              })
             )}
           </TableBody>
         </Table>
-        <Pagination />
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2.5 text-[13px] text-label">
+        <span className="font-mono">{rangeText}</span>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-xs">Pág. {page} / {totalPages}</span>
+          <Button variant="secondary" size="icon" aria-label="Primera página" onClick={() => setPage(1)} disabled={page === 1}>
+            <ChevronsLeft aria-hidden="true" />
+          </Button>
+          <Button variant="secondary" onClick={() => setPage((p) => p - 1)} disabled={page === 1}>Anterior</Button>
+          <Button variant="secondary" onClick={() => setPage((p) => p + 1)} disabled={page >= totalPages}>Siguiente</Button>
+          <Button variant="secondary" size="icon" aria-label="Última página" onClick={() => setPage(totalPages)} disabled={page >= totalPages}>
+            <ChevronsRight aria-hidden="true" />
+          </Button>
+        </div>
       </div>
 
       {/* Modals */}
@@ -577,7 +601,7 @@ export default function ChannelsPage() {
           <DialogHeader><DialogTitle>Asignar grupo</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
             <p className="text-sm text-muted-foreground">
-              Selecciona el grupo para los {selectedIds.size.toLocaleString()} canales seleccionados.
+              Seleccioná el grupo para los {selectedIds.size.toLocaleString()} canales seleccionados.
             </p>
             <div className="space-y-1.5">
               <Label>Grupo</Label>
@@ -593,7 +617,7 @@ export default function ChannelsPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setBulkEditOpen(false)}>Cancelar</Button>
+            <Button variant="secondary" onClick={() => setBulkEditOpen(false)}>Cancelar</Button>
             <Button
               onClick={async () => {
                 try {
@@ -612,6 +636,6 @@ export default function ChannelsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }

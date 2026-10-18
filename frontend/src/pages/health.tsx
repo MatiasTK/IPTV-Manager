@@ -1,23 +1,21 @@
 import { useState, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import {
-  Activity, Search, Radio, Loader2, RefreshCw, Trash2,
-} from 'lucide-react'
-import { PageHeader } from '@/components/layout/page-header'
-import { StatCard } from '@/components/shared/stat-card'
-import { HealthBadge, HealthDot } from '@/components/shared/health-badge'
+import { Activity, Search, Loader2, Trash2 } from 'lucide-react'
+import { PageHeader } from '@/components/shared/page-header'
+import { StatStrip } from '@/components/shared/stat-strip'
+import { StatusLabel } from '@/components/shared/health-badge'
+import { LatencyBar } from '@/components/shared/latency-bar'
 import { EmptyState } from '@/components/shared/empty-state'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useHealthStatus, useHealthChannels, useCheckNow } from '@/hooks/use-health'
+import { useHealthStatus, useHealthChannels, useCheckNow, useCancelCheck } from '@/hooks/use-health'
 import { useCheckChannelHealth, useDeleteDownChannels } from '@/hooks/use-channels'
-import { formatLatency, formatDate, formatRelativeDate } from '@/lib/utils'
+import { formatLatency, formatRelativeDate } from '@/lib/utils'
+import { STATUS_COLOR } from '@/lib/status'
 import type { HealthStatus } from '@/lib/types'
 import { toast } from 'sonner'
 
@@ -57,10 +55,12 @@ export default function HealthPage() {
   const { data: statusData, isLoading: statusLoading } = useHealthStatus()
   const { data: channelsData, isLoading: channelsLoading } = useHealthChannels()
   const checkNow = useCheckNow()
+  const cancelCheck = useCancelCheck()
   const checkSingle = useCheckChannelHealth()
   const deleteDown = useDeleteDownChannels()
   const [checkingId, setCheckingId] = useState<number | null>(null)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [filter, setFilter] = useState<'all' | HealthStatus>('all')
 
   const summary = statusData?.summary
   const switchLog = statusData?.autoSwitchLog ?? []
@@ -113,94 +113,113 @@ export default function HealthPage() {
     }
   }
 
+  const hostOf = (url: string) => {
+    try { return new URL(url).host } catch { return url }
+  }
+
+  const clock = (iso: string) => new Date(iso).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+  const lastCheck = statusData?.lastCheckAt ?? null
+  const nextCheck = statusData?.nextCheckAt ?? null
+  const progress = statusData?.progress
+  const running = isChecking || checkNow.isPending
+  const statusLine = running
+    ? 'VERIFICACIÓN EN CURSO'
+    : lastCheck
+      ? `ÚLTIMO CHEQUEO ${clock(lastCheck)}${nextCheck ? ` · PRÓXIMO ${clock(nextCheck)}` : ''}`
+      : 'SIN CHEQUEOS TODAVÍA'
+  const progressPct = progress && progress.total > 0 ? Math.round((progress.checked / progress.total) * 100) : 0
+
+  const reasonText = (r: string) => (r === 'primary_down' ? 'Canal principal caído' : r)
+
+  const total = summary?.total ?? 0
+  const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 0)
+  const stats = [
+    { key: 'all', label: 'Total activos', value: total, color: '#E7E9EC', pct: 100 },
+    { key: 'healthy', label: 'Saludables', value: summary?.healthy ?? 0, color: STATUS_COLOR.healthy, pct: pct(summary?.healthy ?? 0) },
+    { key: 'degraded', label: 'Lentos', value: summary?.degraded ?? 0, color: STATUS_COLOR.degraded, pct: pct(summary?.degraded ?? 0) },
+    { key: 'intermittent', label: 'Intermitentes', value: summary?.intermittent ?? 0, color: STATUS_COLOR.intermittent, pct: pct(summary?.intermittent ?? 0) },
+    { key: 'down', label: 'Caídos', value: summary?.down ?? 0, color: STATUS_COLOR.down, pct: pct(summary?.down ?? 0) },
+    { key: 'unknown', label: 'Sin verificar', value: summary?.unknown ?? 0, color: STATUS_COLOR.unknown, pct: pct(summary?.unknown ?? 0) },
+  ]
+  const titles: Record<string, string> = {
+    all: 'Todos los canales', healthy: 'Saludables', degraded: 'Lentos',
+    intermittent: 'Intermitentes', down: 'Caídos', unknown: 'Sin verificar',
+  }
+
+  // Peor primero: caídos, y luego por latencia descendente
+  const rows = channels
+    .filter((c) => filter === 'all' || c.health_status === filter)
+    .sort((x, y) => {
+      if ((x.health_status === 'down') !== (y.health_status === 'down')) return x.health_status === 'down' ? -1 : 1
+      return (y.health_latency_ms ?? 0) - (x.health_latency_ms ?? 0)
+    })
+
   return (
-    <div>
+    <>
       <PageHeader
-        title="Estado de Streams"
-        subtitle="Health checking automático y log de switches"
-        icon={Activity}
+        title="Estado de streams"
+        subtitle="Health checking automático y log de cambios a alternativas."
+        status={statusLine}
+        statusColor={running ? '#F2A33A' : '#5AD1A0'}
         actions={
-          <div className="flex items-center gap-2">
+          <>
             {summary && summary.down > 0 && (
-              <Button
-                variant="destructive"
-                onClick={() => setDeleteConfirmOpen(true)}
-                disabled={deleteDown.isPending}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
+              <Button variant="destructive" onClick={() => setDeleteConfirmOpen(true)} disabled={deleteDown.isPending}>
+                <Trash2 aria-hidden="true" />
                 Remover caídos ({summary.down})
               </Button>
             )}
-            <Button onClick={handleCheckNow} disabled={checkNow.isPending}>
-              {checkNow.isPending ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Search className="w-4 h-4 mr-2" />
-              )}
-              Verificar ahora
-            </Button>
-          </div>
+            {isChecking ? (
+              <Button variant="secondary" onClick={() => cancelCheck.mutate()} disabled={cancelCheck.isPending}>
+                Detener
+              </Button>
+            ) : (
+              <Button onClick={handleCheckNow} disabled={checkNow.isPending}>
+                {checkNow.isPending && <Loader2 aria-hidden="true" className="animate-spin" />}
+                Verificar ahora
+              </Button>
+            )}
+          </>
         }
       />
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-        {statusLoading ? (
-          Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)
-        ) : (
-          <>
-            <StatCard icon={Radio} label="Total Activos" value={summary?.total ?? 0} color="purple" />
-            <StatCard icon={Activity} label="Saludables" value={summary?.healthy ?? 0} color="green" />
-            <StatCard icon={Activity} label="Lentos" value={summary?.degraded ?? 0} color="amber" />
-            <StatCard icon={Activity} label="Intermitentes" value={summary?.intermittent ?? 0} color="orange" />
-            <StatCard icon={Activity} label="Caídos" value={summary?.down ?? 0} color="red" />
-            <StatCard icon={Activity} label="Sin verificar" value={summary?.unknown ?? 0} color="slate" />
-          </>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        {/* Auto-switch log */}
-        <Card className="lg:col-span-1">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <RefreshCw className="w-4 h-4 text-primary" />
-              Log de Auto-Switches
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {switchLog.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-4">No hay switches registrados</p>
-            ) : (
-              <div className="space-y-2">
-                {switchLog.slice(0, 10).map((entry, i) => (
-                  <div key={i} className="flex items-start gap-2 text-xs">
-                    <span className="text-muted-foreground flex-shrink-0 mt-0.5">
-                      {formatRelativeDate(entry.timestamp)}
-                    </span>
-                    <span className="text-foreground">
-                      <span className="font-medium">{entry.channelName}</span>
-                      <span className="text-muted-foreground"> → alt #{entry.alternativeId}</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
+      {running && (
+        <div role="status" className="flex flex-col gap-2">
+          <div className="flex justify-between font-mono text-xs text-muted-foreground">
+            <span>Verificando streams…</span>
+            {progress && progress.total > 0 && (
+              <span>{progress.checked.toLocaleString('es-AR')} / {progress.total.toLocaleString('es-AR')}</span>
             )}
-          </CardContent>
-        </Card>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-[3px] bg-border">
+            <div className="h-1.5 rounded-[3px] bg-primary transition-[width] duration-500" style={{ width: `${progressPct}%` }} />
+          </div>
+        </div>
+      )}
 
-        {/* Channels table */}
-        <div className="lg:col-span-2 min-w-0 rounded-xl border border-border bg-card overflow-hidden">
-          <Table>
+      {statusLoading ? (
+        <Skeleton className="h-[104px] rounded-[10px]" />
+      ) : (
+        <StatStrip items={stats} activeKey={filter} onSelect={(k) => setFilter(k as 'all' | HealthStatus)} />
+      )}
+
+      <div className="flex flex-wrap items-start gap-[22px]">
+        {/* Canales */}
+        <section aria-label="Canales" className="min-w-0 flex-[2_1_560px] overflow-hidden rounded-[10px] border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
+            <h2 className="text-[15px] font-bold">{titles[filter]} · {rows.length.toLocaleString('es-AR')}</h2>
+            <span className="font-mono text-xs text-label">peor primero</span>
+          </div>
+          <Table className="min-w-[700px]">
             <TableHeader>
-              <TableRow className="hover:bg-transparent border-border">
+              <TableRow className="hover:bg-transparent">
                 <TableHead>Canal</TableHead>
                 <TableHead>Fuente</TableHead>
                 <TableHead>Estado</TableHead>
                 <TableHead>Latencia</TableHead>
-                <TableHead>Alt.</TableHead>
-                <TableHead>Último check</TableHead>
-                <TableHead className="w-12"></TableHead>
+                <TableHead className="text-right">Alt.</TableHead>
+                <TableHead className="text-right">Último check</TableHead>
+                <TableHead className="w-14"><span className="sr-only">Verificar</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -212,8 +231,8 @@ export default function HealthPage() {
                     ))}
                   </TableRow>
                 ))
-              ) : channels.length === 0 ? (
-                <TableRow>
+              ) : rows.length === 0 ? (
+                <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={7}>
                     <EmptyState
                       icon={Activity}
@@ -223,60 +242,68 @@ export default function HealthPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                channels.map((ch) => (
-                  <TableRow key={ch.id}>
-                    <TableCell className="max-w-[200px] truncate" title={ch.name}>
-                      <div className="flex items-center gap-2">
-                        <HealthDot status={ch.health_status as HealthStatus} size="sm" />
-                        <span className="text-sm font-medium truncate">{ch.name}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {ch.source_name ? (
-                        <Badge variant="outline" className="font-normal text-xs text-muted-foreground bg-muted/30 border-muted-foreground/20 max-w-[120px] truncate" title={ch.source_name}>
-                          {ch.source_name}
-                        </Badge>
-                      ) : (
-                        <span className="text-xs text-muted-foreground italic">Manual</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <HealthBadge status={ch.health_status as HealthStatus} />
-                    </TableCell>
-                    <TableCell className="text-sm font-mono text-muted-foreground">
-                      {formatLatency(ch.health_latency_ms)}
-                    </TableCell>
-                    <TableCell>
-                      {ch.alt_count > 0 ? (
-                        <Badge variant="secondary" className="text-xs">+{ch.alt_count}</Badge>
-                      ) : (
-                        <span className="text-muted-foreground text-sm">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {ch.last_health_check ? formatRelativeDate(ch.last_health_check) : '—'}
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => handleCheckSingle(ch.id, ch.name)}
-                        disabled={checkingId === ch.id}
-                      >
-                        {checkingId === ch.id ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Search className="w-3.5 h-3.5" />
-                        )}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))
+                rows.map((ch) => {
+                  const status = ch.health_status as HealthStatus
+                  return (
+                    <TableRow key={ch.id}>
+                      <TableCell className="max-w-[220px] truncate font-semibold" title={ch.name}>{ch.name}</TableCell>
+                      <TableCell className="max-w-[160px] truncate text-muted-foreground" title={ch.source_name ?? undefined}>
+                        {ch.source_name ?? <span className="italic">Manual</span>}
+                      </TableCell>
+                      <TableCell><StatusLabel status={status} /></TableCell>
+                      <TableCell><LatencyBar status={status} ms={ch.health_latency_ms} /></TableCell>
+                      <TableCell className="text-right font-mono text-muted-foreground">
+                        {ch.alt_count > 0 ? `+${ch.alt_count}` : '—'}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs text-label">
+                        {ch.last_health_check ? formatRelativeDate(ch.last_health_check) : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Verificar ${ch.name}`}
+                          onClick={() => handleCheckSingle(ch.id, ch.name)}
+                          disabled={checkingId === ch.id}
+                        >
+                          {checkingId === ch.id ? <Loader2 aria-hidden="true" className="animate-spin" /> : <Search aria-hidden="true" />}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })
               )}
             </TableBody>
           </Table>
-        </div>
+        </section>
+
+        {/* Log de switches */}
+        <aside aria-label="Log de switches" className="min-w-0 flex-[1_1_300px] rounded-[10px] border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
+            <h2 className="text-[15px] font-bold">Log de switches</h2>
+            <span className="font-mono text-xs text-label">recientes</span>
+          </div>
+          {switchLog.length === 0 ? (
+            <p className="px-4 py-8 text-center text-sm text-muted-foreground">No hay switches registrados</p>
+          ) : (
+            <ol className="m-0 list-none py-1.5">
+              {switchLog.slice(0, 10).map((entry, i) => (
+                <li key={i} className="flex gap-3 border-b border-border px-4 py-2.5 last:border-b-0">
+                  <span className="min-w-11 font-mono text-xs text-label">
+                    {clock(entry.timestamp)}
+                  </span>
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="text-sm font-semibold">{entry.channelName}</span>
+                    <span className="font-mono text-[11px] break-all text-muted-foreground">
+                      {entry.fromSource ?? hostOf(entry.fromUrl)} → <span className="text-healthy">{entry.toSource ?? hostOf(entry.toUrl)}</span>
+                    </span>
+                    <span className="text-xs text-label">{reasonText(entry.reason)}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </aside>
       </div>
 
       <ConfirmDialog
@@ -288,6 +315,6 @@ export default function HealthPage() {
         onConfirm={handleDeleteDown}
         variant="destructive"
       />
-    </div>
+    </>
   )
 }

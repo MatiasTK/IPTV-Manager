@@ -3,7 +3,10 @@
 const express = require('express');
 const db = require('../db/database');
 const { authMiddleware, csrfMiddleware } = require('../middleware/auth');
-const { runHealthCheck, checkSingleChannel, isCheckRunning, autoSwitchLog } = require('../services/health-checker');
+const {
+  runHealthCheck, checkSingleChannel, isCheckRunning, autoSwitchLog,
+  requestCancel, getProgress, getNextRunAt, getIntervalMs, getCurrentSourceId,
+} = require('../services/health-checker');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -25,14 +28,27 @@ router.get('/status', (req, res) => {
     summary.total += row.count;
   }
 
-  res.json({ summary, autoSwitchLog: autoSwitchLog.slice(0, 20), isChecking: isCheckRunning() });
+  const last = db.prepare('SELECT MAX(last_health_check) AS t FROM channels WHERE is_active = 1').get();
+  // SQLite guarda "YYYY-MM-DD HH:MM:SS" en UTC; se normaliza a ISO
+  const lastCheckAt = last && last.t ? new Date(String(last.t).replace(' ', 'T') + 'Z').toISOString() : null;
+
+  res.json({
+    summary,
+    autoSwitchLog: autoSwitchLog.slice(0, 20),
+    isChecking: isCheckRunning(),
+    progress: getProgress(),
+    checkingSourceId: getCurrentSourceId(),
+    lastCheckAt,
+    nextCheckAt: getNextRunAt(),
+    intervalMinutes: Math.round(getIntervalMs() / 60000),
+  });
 });
 
 // ── GET /api/health/channels ───────────────────────────────────────────────────
 router.get('/channels', (req, res) => {
   const channels = db.prepare(`
     SELECT
-      c.id, c.name, c.url, c.health_status, c.health_latency_ms, c.last_health_check,
+      c.id, c.name, c.url, c.source_id, c.health_status, c.health_latency_ms, c.last_health_check,
       g.name AS group_name,
       s.name AS source_name,
       (SELECT COUNT(*) FROM channel_alternatives ca WHERE ca.primary_channel_id = c.id) AS alt_count
@@ -70,13 +86,30 @@ router.get('/channels/:id/history', (req, res) => {
 
 // ── POST /api/health/check-now ─────────────────────────────────────────────────
 router.post('/check-now', async (req, res) => {
+  // Body opcional: { sourceId } verifica solo los canales de esa fuente
+  let sourceId = null;
+  if (req.body && req.body.sourceId !== undefined && req.body.sourceId !== null) {
+    sourceId = Number(req.body.sourceId);
+    if (!Number.isInteger(sourceId) || !db.prepare('SELECT 1 FROM sources WHERE id = ?').get(sourceId)) {
+      return res.status(404).json({ error: 'Source not found.' });
+    }
+  }
+  if (isCheckRunning()) {
+    return res.status(409).json({ error: 'Ya hay una verificación en curso.' });
+  }
+
   // Fire and forget — respond immediately
   res.json({ ok: true, message: 'Health check started.' });
   try {
-    await runHealthCheck(true);
+    await runHealthCheck(true, sourceId);
   } catch (err) {
     console.error('[Health] check-now error:', err.message);
   }
+});
+
+// ── POST /api/health/cancel ────────────────────────────────────────────────────
+router.post('/cancel', (req, res) => {
+  res.json({ ok: true, wasRunning: requestCancel() });
 });
 
 // ── POST /api/health/check/:id ─────────────────────────────────────────────────

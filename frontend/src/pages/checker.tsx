@@ -1,17 +1,24 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
-import {
-  ShieldCheck, Wifi, WifiOff, Loader2, Play, Trash2,
-  Clock, Tv, Calendar, Server, Copy, ChevronDown, ChevronUp,
-  AlertCircle, CheckCircle2, XCircle, Info, List,
-  Search, Filter, Radio, RefreshCw
-} from 'lucide-react'
-import { PageHeader } from '@/components/layout/page-header'
+import { useState, useCallback, useEffect, useMemo } from 'react'
+import { Loader2, Copy, RefreshCw, Search, ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react'
+import { useNavigate } from 'react-router'
+import { PageHeader } from '@/components/shared/page-header'
+import { StatStrip, type StatItem } from '@/components/shared/stat-strip'
+import { FilterChips } from '@/components/shared/filter-chips'
+import { StatusLabel } from '@/components/shared/health-badge'
+import { LatencyBar } from '@/components/shared/latency-bar'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { LinkExtractor } from '@/components/checker/link-extractor'
+import { SortableHead, compareValues, nextSort, type SortState } from '@/components/shared/sortable-head'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { api, getCsrfToken } from '@/lib/api'
+import { STATUS_COLOR } from '@/lib/status'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import type { HealthStatus } from '@/lib/types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -27,7 +34,7 @@ interface ServerInfo {
   username: string
 }
 
-interface CheckResult {
+export interface CheckResult {
   url: string
   type: 'xtream' | 'm3u'
   status: 'online' | 'offline'
@@ -61,28 +68,48 @@ interface ChannelsData {
   summary: ChannelSummary
 }
 
+type InputMode = 'xtream' | 'm3u' | 'batch' | 'extract'
+
+interface RecentCheck {
+  host: string
+  type: 'xtream' | 'm3u'
+  result: string
+  ok: boolean
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+const RECENTS_KEY = 'iptv-checker-recents'
+
+function loadRecents(): RecentCheck[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? '[]')
+    return Array.isArray(parsed) ? parsed.slice(0, 5) : []
+  } catch { return [] }
+}
+
+function saveRecents(list: RecentCheck[]) {
+  try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 5))) } catch { /* sin storage */ }
+}
+
+function hostOf(url: string): string {
+  try {
+    const u = new URL(url)
+    return `${u.protocol}//${u.host}`
+  } catch { return url.slice(0, 60) }
+}
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—'
   try {
-    return new Date(iso).toLocaleDateString('es-AR', {
-      year: 'numeric', month: 'short', day: 'numeric',
-    })
+    return new Date(iso).toLocaleDateString('es-AR', { year: 'numeric', month: '2-digit', day: '2-digit' })
   } catch { return '—' }
 }
 
 function formatMs(ms: number): string {
   if (ms === 0) return '—'
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
-function getLatencyColor(ms: number): string {
-  if (ms <= 0) return 'text-muted-foreground'
-  if (ms < 500) return 'text-emerald-400'
-  if (ms < 1500) return 'text-amber-400'
-  return 'text-red-400'
+  if (ms < 1000) return `${ms} ms`
+  return `${(ms / 1000).toFixed(1)} s`
 }
 
 function isExpiringSoon(iso: string | null): boolean {
@@ -103,100 +130,29 @@ function parseUrls(text: string): string[] {
     .filter(u => u.length > 0 && (u.startsWith('http://') || u.startsWith('https://')))
 }
 
-function playInVlc(name: string, url: string) {
-  const content = `#EXTM3U\n#EXTINF:-1,${name}\n${url}\n`
-  const blob = new Blob([content], { type: 'audio/x-mpegurl' })
-  const blobUrl = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = blobUrl
-  a.download = `${name.replace(/[/\\?%*:|"<>]/g, '-')}.m3u`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(blobUrl)
+function buildXtreamUrl(host: string, user: string, pass: string): string {
+  const base = host.trim().replace(/\/+$/, '')
+  return `${base}/player_api.php?username=${encodeURIComponent(user.trim())}&password=${encodeURIComponent(pass)}`
 }
 
-function healthColor(h: ChannelHealth): string {
-  if (h === 'online')  return 'text-emerald-400'
-  if (h === 'slow')    return 'text-amber-400'
-  if (h === 'checking') return 'text-primary animate-pulse font-medium'
-  if (h === 'unknown')  return 'text-muted-foreground/60'
-  return 'text-red-400'
-}
-function healthBg(h: ChannelHealth): string {
-  if (h === 'online')  return 'bg-emerald-500/10 border-emerald-500/20'
-  if (h === 'slow')    return 'bg-amber-500/10 border-amber-500/20'
-  if (h === 'checking') return 'bg-primary/5 border-primary/20'
-  if (h === 'unknown')  return 'bg-muted/10 border-border/10'
-  return 'bg-red-500/10 border-red-500/20'
-}
-function healthDot(h: ChannelHealth): string {
-  if (h === 'online')  return 'bg-emerald-400'
-  if (h === 'slow')    return 'bg-amber-400'
-  if (h === 'checking') return 'bg-primary animate-pulse'
-  if (h === 'unknown')  return 'bg-muted-foreground/30'
-  return 'bg-red-400'
-}
-function healthLabel(h: ChannelHealth): string {
-  if (h === 'online')  return 'Online'
-  if (h === 'slow')    return 'Lento'
-  if (h === 'checking') return 'Verificando...'
-  if (h === 'unknown')  return 'Sin verificar'
-  return 'Offline'
+const HEALTH_MAP: Record<ChannelHealth, HealthStatus> = {
+  online: 'healthy',
+  slow: 'degraded',
+  offline: 'down',
+  checking: 'unknown',
+  unknown: 'unknown',
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: 'online' | 'offline' }) {
-  if (status === 'online') {
+function ChannelStatus({ health }: { health: ChannelHealth }) {
+  if (health === 'checking') {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-        Online
+      <span className="inline-flex animate-pulse items-center gap-2 font-mono text-xs whitespace-nowrap text-primary">
+        <span aria-hidden="true" className="size-2 rounded-full bg-primary" />
+        VERIFICANDO
       </span>
     )
   }
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500/15 text-red-400 border border-red-500/25">
-      <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
-      Offline
-    </span>
-  )
-}
-
-function TypeBadge({ type }: { type: 'xtream' | 'm3u' }) {
-  return (
-    <span className={cn(
-      'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider',
-      type === 'xtream'
-        ? 'bg-violet-500/15 text-violet-400 border border-violet-500/20'
-        : 'bg-sky-500/15 text-sky-400 border border-sky-500/20'
-    )}>
-      {type === 'xtream' ? <Server className="w-2.5 h-2.5" /> : <Tv className="w-2.5 h-2.5" />}
-      {type}
-    </span>
-  )
-}
-
-function ExpiryBadge({ expiresAt }: { expiresAt: string | null }) {
-  if (!expiresAt) return <span className="text-muted-foreground text-sm">—</span>
-
-  const expired = isExpired(expiresAt)
-  const warning = !expired && isExpiringSoon(expiresAt)
-
-  return (
-    <span className={cn(
-      'inline-flex items-center gap-1 text-xs font-medium',
-      expired && 'text-red-400',
-      warning && 'text-amber-400',
-      !expired && !warning && 'text-muted-foreground'
-    )}>
-      <Calendar className="w-3 h-3" />
-      {expired ? 'Expirado: ' : ''}{formatDate(expiresAt)}
-      {expired && <AlertCircle className="w-3 h-3 ml-0.5" />}
-      {warning && <AlertCircle className="w-3 h-3 ml-0.5 text-amber-400" />}
-    </span>
-  )
+  return <StatusLabel status={HEALTH_MAP[health]} />
 }
 
 // ── Channel Health Panel ───────────────────────────────────────────────────────
@@ -210,16 +166,20 @@ interface ChannelHealthPanelProps {
   onStartBulkCheck: () => Promise<void>
 }
 
+const PAGE_SIZE = 100
+
+type ChannelSortKey = 'name' | 'group' | 'health' | 'latency'
+const HEALTH_RANK: Record<ChannelHealth, number> = { online: 0, slow: 1, checking: 2, unknown: 3, offline: 4 }
+
 function ChannelHealthPanel({ data, setData, checkingInProgress, onStartBulkCheck }: ChannelHealthPanelProps) {
   const [filter, setFilter]   = useState<HealthFilter>('all')
   const [search, setSearch]   = useState('')
   const [page, setPage]       = useState(1)
-  
-  const PAGE_SIZE = 100
+  const [sort, setSort]       = useState<SortState<ChannelSortKey> | null>(null)
 
   const { channels, summary } = data
 
-  const filtered = channels.filter(ch => {
+  const matching = channels.filter(ch => {
     if (filter !== 'all' && ch.health !== filter) return false
     if (search) {
       const q = search.toLowerCase()
@@ -228,10 +188,21 @@ function ChannelHealthPanel({ data, setData, checkingInProgress, onStartBulkChec
     return true
   })
 
+  const filtered = useMemo(() => {
+    if (!sort) return matching
+    const val = (c: ChannelEntry) =>
+      sort.key === 'health' ? HEALTH_RANK[c.health]
+      : sort.key === 'latency' ? (c.health === 'online' || c.health === 'slow' ? c.latencyMs : null)
+      : c[sort.key]
+    return [...matching].sort((a, b) => compareValues(val(a), val(b), sort.dir))
+  }, [channels, filter, search, sort])
+
   // Reset to first page on search or filter change
   useEffect(() => {
     setPage(1)
   }, [filter, search])
+
+  const onSort = (k: ChannelSortKey) => { setSort(s => nextSort(s, k)); setPage(1) }
 
   const checkingCount = channels.filter(c => c.health === 'checking').length
   const unknownCount  = channels.filter(c => c.health === 'unknown').length
@@ -292,231 +263,125 @@ function ChannelHealthPanel({ data, setData, checkingInProgress, onStartBulkChec
     }
   }
 
-  const filterButtons: { key: HealthFilter; label: string; count: number; color: string; dotColor: string }[] = [
-    { key: 'all',      label: 'Todos',          count: summary.total,   color: 'text-foreground',    dotColor: 'bg-primary' },
-    { key: 'online',   label: 'Online',         count: summary.online,  color: 'text-emerald-400',   dotColor: 'bg-emerald-400' },
-    { key: 'slow',     label: 'Lentos',         count: summary.slow,    color: 'text-amber-400',     dotColor: 'bg-amber-400' },
-    { key: 'offline',  label: 'Offline',        count: summary.offline, color: 'text-red-400',       dotColor: 'bg-red-400' },
-    { key: 'checking', label: 'Verificando',    count: checkingCount,   color: 'text-primary animate-pulse', dotColor: 'bg-primary' },
-    { key: 'unknown',  label: 'Sin verificar',  count: unknownCount,    color: 'text-muted-foreground/60', dotColor: 'bg-muted-foreground/30' },
+  const chips: { value: HealthFilter; label: string; count: number; color: string }[] = [
+    { value: 'all',      label: 'Todos',         count: summary.total,   color: '#E7E9EC' },
+    { value: 'online',   label: 'Online',        count: summary.online,  color: STATUS_COLOR.healthy },
+    { value: 'slow',     label: 'Lento',         count: summary.slow,    color: STATUS_COLOR.degraded },
+    { value: 'offline',  label: 'Caído',         count: summary.offline, color: STATUS_COLOR.down },
+    { value: 'checking', label: 'Verificando',   count: checkingCount,   color: '#F2A33A' },
+    { value: 'unknown',  label: 'Sin verificar', count: unknownCount,    color: STATUS_COLOR.unknown },
   ]
+  const visibleChips = chips.filter(c => c.value === 'all' || c.count > 0 || c.value === filter)
 
   return (
-    <div className="border-t border-border/50 bg-muted/[0.08]">
-      {/* Summary counters */}
-      <div className="px-4 pt-4 pb-3">
-        <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-3 flex items-center gap-1.5">
-          <Radio className="w-3 h-3" /> Estado de canales · {summary.total.toLocaleString()} total
-        </p>
-
-        {/* Progress bar */}
-        <div className="flex h-2 rounded-full overflow-hidden gap-px mb-3 bg-muted/50">
-          {summary.online  > 0 && (
-            <div
-              className="bg-emerald-500 transition-all duration-700 rounded-l-full"
-              style={{ width: `${(summary.online / summary.total) * 100}%` }}
-              title={`Online: ${summary.online}`}
-            />
-          )}
-          {summary.slow    > 0 && (
-            <div
-              className="bg-amber-500 transition-all duration-700"
-              style={{ width: `${(summary.slow / summary.total) * 100}%` }}
-              title={`Lentos: ${summary.slow}`}
-            />
-          )}
-          {summary.offline > 0 && (
-            <div
-              className="bg-red-500 transition-all duration-700 rounded-r-full"
-              style={{ width: `${(summary.offline / summary.total) * 100}%` }}
-              title={`Offline: ${summary.offline}`}
-            />
-          )}
-        </div>
-
-        {/* Filter pills + counts */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {filterButtons.map(({ key, label, count, color, dotColor }) => (
-            count > 0 || key === 'all' ? (
-              <button
-                key={key}
-                onClick={() => setFilter(key)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all duration-150',
-                  filter === key
-                    ? 'bg-primary/15 border-primary/30 text-primary'
-                    : 'bg-muted/40 border-border/50 text-muted-foreground hover:text-foreground hover:border-border'
-                )}
-              >
-                <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', dotColor)} />
-                <span className={filter === key ? '' : color}>{label}</span>
-                <span className="font-bold font-mono">{count}</span>
-              </button>
-            ) : null
-          ))}
-
-          {/* Search and Action Buttons */}
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn(
-                "h-7 px-2.5 text-[11px] font-semibold gap-1.5",
-                checkingInProgress && "animate-pulse border-primary/30 text-primary bg-primary/5 hover:bg-primary/5"
-              )}
-              onClick={onStartBulkCheck}
-              disabled={checkingInProgress}
-            >
-              {checkingInProgress ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-              ) : (
-                <Play className="w-3 h-3 fill-current text-emerald-450" />
-              )}
-              {checkingInProgress ? 'Verificando...' : 'Verificar todos'}
-            </Button>
-
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground/50" />
-              <input
-                type="text"
-                placeholder="Buscar canal..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className={cn(
-                  'pl-7 pr-3 py-1 text-xs rounded-lg border border-border bg-muted/40',
-                  'text-foreground placeholder:text-muted-foreground/40',
-                  'focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/30',
-                  'transition-all w-36'
-                )}
-              />
-            </div>
-          </div>
-        </div>
+    <div className="flex flex-col gap-4 border-t border-border p-5">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <FilterChips label="Estado de los canales" options={visibleChips} value={filter} onChange={setFilter} />
+        <label className="flex h-11 min-w-[200px] flex-[1_1_220px] items-center gap-2.5 rounded-lg border border-control bg-card px-3.5 hover:border-control-strong focus-within:border-control-strong">
+          <Search aria-hidden="true" className="size-4 shrink-0 text-label" />
+          <span className="sr-only">Buscar canal</span>
+          <input
+            type="text"
+            placeholder="Buscar canal…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
+          />
+        </label>
+        <Button variant="secondary" onClick={onStartBulkCheck} disabled={checkingInProgress}>
+          {checkingInProgress && <Loader2 aria-hidden="true" className="animate-spin" />}
+          {checkingInProgress ? 'Verificando...' : 'Verificar todos'}
+        </Button>
       </div>
 
-      {/* Channel list */}
-      <div className="max-h-96 overflow-y-auto px-4 pb-4">
-        {filtered.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">
-            No se encontraron canales{search ? ` para "${search}"` : ''}
-          </div>
-        ) : (
-          <div className="space-y-0.5">
-            {paginated.map((ch, i) => (
-              <div
-                key={ch.url + i}
-                className={cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-lg text-xs group',
-                  'hover:bg-muted/40 transition-colors duration-100'
-                )}
-              >
-                {/* Logo or radio icon */}
-                <div className="w-6 h-6 rounded flex-shrink-0 overflow-hidden bg-muted/60 flex items-center justify-center">
-                  {ch.logo ? (
-                    <img
-                      src={ch.logo}
-                      alt=""
-                      className="w-full h-full object-contain"
-                      onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-                    />
-                  ) : (
-                    <Radio className="w-3 h-3 text-muted-foreground/50" />
-                  )}
-                </div>
-
-                {/* Name & group */}
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-foreground truncate">{ch.name}</p>
-                  {ch.group && (
-                    <p className="text-[10px] text-muted-foreground/60 truncate">{ch.group}</p>
-                  )}
-                </div>
-
-                {/* Latency */}
-                {ch.latencyMs > 0 && (
-                  <span className={cn('font-mono text-[10px] flex-shrink-0', getLatencyColor(ch.latencyMs))}>
-                    {formatMs(ch.latencyMs)}
-                  </span>
-                )}
-
-                {/* Health dot */}
-                <span className={cn(
-                  'inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold flex-shrink-0',
-                  healthBg(ch.health)
-                )}>
-                  <span className={cn('w-1.5 h-1.5 rounded-full', healthDot(ch.health), ch.health === 'online' && 'animate-pulse')} />
-                  <span className={healthColor(ch.health)}>{healthLabel(ch.health)}</span>
-                </span>
-
-                {/* Verify single channel */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn(
-                    "h-6 w-6 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all rounded-md flex-shrink-0",
-                    ch.health === 'checking' ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                  )}
-                  onClick={() => handleProbeChannel(ch.url)}
-                  disabled={checkingInProgress || ch.health === 'checking'}
-                  title="Verificar este canal"
-                >
-                  {ch.health === 'checking' ? (
-                    <Loader2 className="w-3 h-3 animate-spin text-primary" />
-                  ) : (
-                    <RefreshCw className="w-3 h-3" />
-                  )}
-                </Button>
-
-                {/* Copy stream URL */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 text-muted-foreground hover:text-primary hover:bg-primary/10 opacity-0 group-hover:opacity-100 transition-all rounded-md flex-shrink-0"
-                  onClick={() => {
-                    navigator.clipboard.writeText(ch.url)
-                    toast.success('Enlace de canal copiado')
-                  }}
-                  title="Copiar enlace de transmisión"
-                >
-                  <Copy className="w-3 h-3" />
-                </Button>
-              </div>
+      <div className="overflow-hidden rounded-[10px] border border-border bg-card">
+        <Table className="min-w-[760px]">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <SortableHead label="Canal" sortKey="name" sort={sort} onSort={onSort} />
+              <SortableHead label="Categoría" sortKey="group" sort={sort} onSort={onSort} />
+              <SortableHead label="Estado" sortKey="health" sort={sort} onSort={onSort} />
+              <SortableHead label="Latencia" sortKey="latency" sort={sort} onSort={onSort} />
+              <TableHead className="text-right">Acciones</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {paginated.length === 0 ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={5} className="py-10 text-center text-sm text-label">
+                  No se encontraron canales{search ? ` para "${search}"` : ''}
+                </TableCell>
+              </TableRow>
+            ) : paginated.map((ch, i) => (
+              <TableRow key={ch.url + i}>
+                <TableCell className="max-w-[320px]">
+                  <div className="flex items-center gap-3">
+                    <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted font-mono text-[10px] text-[#C9CED4]">
+                      {ch.logo ? (
+                        <img
+                          src={ch.logo}
+                          alt=""
+                          referrerPolicy="no-referrer"
+                          className="size-full object-contain"
+                          onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+                        />
+                      ) : ch.name.slice(0, 2).toUpperCase()}
+                    </div>
+                    <span className="truncate font-semibold" title={ch.name}>{ch.name}</span>
+                  </div>
+                </TableCell>
+                <TableCell className="text-muted-foreground">{ch.group || '—'}</TableCell>
+                <TableCell><ChannelStatus health={ch.health} /></TableCell>
+                <TableCell>
+                  {ch.health === 'checking' || ch.health === 'unknown'
+                    ? <span className="font-mono text-xs text-label">—</span>
+                    : <LatencyBar status={HEALTH_MAP[ch.health]} ms={ch.latencyMs} />}
+                </TableCell>
+                <TableCell>
+                  <div className="flex justify-end gap-1.5">
+                    <Button
+                      variant="secondary"
+                      size="icon-sm"
+                      aria-label={`Verificar ${ch.name}`}
+                      onClick={() => handleProbeChannel(ch.url)}
+                      disabled={checkingInProgress || ch.health === 'checking'}
+                    >
+                      {ch.health === 'checking'
+                        ? <Loader2 aria-hidden="true" className="animate-spin" />
+                        : <RefreshCw aria-hidden="true" />}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="icon-sm"
+                      aria-label={`Copiar URL de ${ch.name}`}
+                      onClick={() => {
+                        navigator.clipboard.writeText(ch.url)
+                        toast.success('Enlace de canal copiado')
+                      }}
+                    >
+                      <Copy aria-hidden="true" />
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
             ))}
-          </div>
-        )}
+          </TableBody>
+        </Table>
       </div>
 
-      {filtered.length > 0 && filtered.length < channels.length && (
-        <p className="px-4 pb-3 text-[10px] text-muted-foreground/50 text-center">
-          Mostrando {filtered.length} de {channels.length.toLocaleString()} canales
-        </p>
-      )}
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 pb-4 pt-2 border-t border-border/20 bg-muted/[0.04] mt-2">
-          <span className="text-[11px] text-muted-foreground">
-            Página {safePage} de {totalPages} · {filtered.length.toLocaleString()} canales
+      {filtered.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2.5 text-[13px] text-label">
+          <span className="font-mono">
+            {((safePage - 1) * PAGE_SIZE + 1).toLocaleString('es-AR')}–{Math.min(safePage * PAGE_SIZE, filtered.length).toLocaleString('es-AR')} de {filtered.length.toLocaleString('es-AR')}
+            {filtered.length < channels.length ? ` (de ${channels.length.toLocaleString('es-AR')})` : ''}
           </span>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 px-2.5 text-[11px] font-medium"
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={safePage === 1}
-            >
-              Anterior
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 px-2.5 text-[11px] font-medium"
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={safePage === totalPages}
-            >
-              Siguiente
-            </Button>
-          </div>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs">Pág. {safePage} / {totalPages}</span>
+              <Button variant="secondary" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={safePage === 1}>Anterior</Button>
+              <Button variant="secondary" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>Siguiente</Button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -525,7 +390,34 @@ function ChannelHealthPanel({ data, setData, checkingInProgress, onStartBulkChec
 
 // ── Result Card ───────────────────────────────────────────────────────────────
 
-function ResultCard({ result, index }: { result: CheckResult; index: number }) {
+export interface ImportPrefill {
+  type: 'url' | 'xtream'
+  name: string
+  url?: string
+  host?: string
+  user?: string
+  pass?: string
+}
+
+function toPrefill(result: CheckResult): ImportPrefill {
+  const name = hostOf(result.url).replace(/^https?:\/\//, '')
+  if (result.type === 'xtream') {
+    try {
+      const u = new URL(result.url)
+      return {
+        type: 'xtream',
+        name,
+        host: `${u.protocol}//${u.host}`,
+        user: u.searchParams.get('username') ?? '',
+        pass: u.searchParams.get('password') ?? '',
+      }
+    } catch { /* cae a url */ }
+  }
+  return { type: 'url', name, url: result.url }
+}
+
+function ResultCard({ result }: { result: CheckResult }) {
+  const navigate = useNavigate()
   const [infoExpanded, setInfoExpanded]       = useState(false)
   const [channelsData, setChannelsData]       = useState<ChannelsData | null>(null)
   const [channelsLoading, setChannelsLoading] = useState(false)
@@ -669,213 +561,118 @@ function ResultCard({ result, index }: { result: CheckResult; index: number }) {
     }
   }, [result.url, channelsData])
 
-  const shortUrl = (() => {
-    try {
-      const u = new URL(result.url)
-      return `${u.protocol}//${u.host}`
-    } catch { return result.url.slice(0, 60) }
-  })()
+  const shortUrl = hostOf(result.url)
+
+  const expired = isExpired(result.expiresAt)
+  const soon = isExpiringSoon(result.expiresAt)
+  const checked = channelsData ? channelsData.summary.online + channelsData.summary.slow + channelsData.summary.offline : 0
+  const onlinePct = channelsData && checked > 0 ? Math.round((channelsData.summary.online / checked) * 100) : null
+  const si = result.serverInfo
+
+  const account: StatItem[] = [
+    {
+      key: 'account',
+      label: 'Cuenta',
+      value: !isOnline ? 'OFFLINE' : expired ? 'EXPIRADA' : result.type === 'xtream' ? 'ACTIVA' : 'ONLINE',
+      color: !isOnline || expired ? STATUS_COLOR.down : STATUS_COLOR.healthy,
+    },
+    { key: 'latency', label: 'Latencia', value: formatMs(result.responseTimeMs) },
+    ...(result.expiresAt
+      ? [{ key: 'expires', label: 'Expira', value: formatDate(result.expiresAt), color: expired ? STATUS_COLOR.down : soon ? STATUS_COLOR.degraded : '#E7E9EC' }]
+      : []),
+    ...(si && si.activeConnections !== null
+      ? [{ key: 'conn', label: 'Conexiones', value: `${si.activeConnections} / ${si.maxConnections ?? '∞'}` }]
+      : []),
+    ...(result.channelCount !== null ? [{ key: 'channels', label: 'Canales', value: result.channelCount.toLocaleString('es-AR') }] : []),
+    ...(onlinePct !== null
+      ? [{ key: 'online', label: 'Online', value: `${onlinePct}%`, color: onlinePct >= 70 ? STATUS_COLOR.healthy : onlinePct >= 40 ? STATUS_COLOR.degraded : STATUS_COLOR.down }]
+      : []),
+  ]
 
   return (
-    <div
-      className={cn(
-        'rounded-xl border transition-all duration-300 animate-fade-in-up overflow-hidden',
-        isOnline
-          ? 'border-emerald-500/20 bg-emerald-500/[0.03] hover:border-emerald-500/35'
-          : 'border-red-500/20 bg-red-500/[0.03] hover:border-red-500/35'
-      )}
-      style={{ animationDelay: `${index * 60}ms` }}
-    >
-      {/* ── Main row ───────────────────────────────────────────────────────── */}
-      <div className="p-4">
-        <div className="flex items-start gap-3">
-          {/* Status icon */}
-          <div className={cn(
-            'mt-0.5 w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0',
-            isOnline ? 'bg-emerald-500/15' : 'bg-red-500/15'
-          )}>
-            {isOnline
-              ? <Wifi className="w-4 h-4 text-emerald-400" />
-              : <WifiOff className="w-4 h-4 text-red-400" />
-            }
-          </div>
-
-          {/* Info */}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap mb-1">
-              <StatusBadge status={result.status} />
-              <TypeBadge type={result.type} />
-              {result.serverInfo?.isTrial && (
-                <Badge variant="outline" className="text-[10px] border-amber-500/30 text-amber-400 bg-amber-500/10">
-                  Trial
-                </Badge>
-              )}
-            </div>
-            <p
-              className="text-sm text-muted-foreground font-mono truncate cursor-pointer hover:text-foreground transition-colors"
-              title={result.url}
-              onClick={handleCopyUrl}
-            >
-              {shortUrl}
-            </p>
-          </div>
-
-          {/* Quick stats — desktop */}
-          <div className="hidden sm:flex items-center gap-4 flex-shrink-0 text-sm">
-            <div className="text-center">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-0.5">Latencia</p>
-              <p className={cn('font-mono font-semibold text-sm', getLatencyColor(result.responseTimeMs))}>
-                {formatMs(result.responseTimeMs)}
-              </p>
-            </div>
-
-            {result.channelCount !== null && (
-              <div className="text-center">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-0.5">Canales</p>
-                <p className="font-mono font-semibold text-sm text-foreground">{result.channelCount.toLocaleString()}</p>
-              </div>
-            )}
-
-            {result.expiresAt && (
-              <div className="text-center">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-0.5">Expira</p>
-                <ExpiryBadge expiresAt={result.expiresAt} />
-              </div>
-            )}
-          </div>
-
-          {/* Action buttons */}
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-              onClick={handleCopyUrl}
-              title="Copiar URL"
-            >
-              <Copy className="w-3.5 h-3.5" />
-            </Button>
-
-            {/* Ver canales — only for online sources */}
-            {isOnline && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  'h-7 px-2.5 gap-1.5 text-xs font-medium transition-all rounded-md',
-                  channelsOpen
-                    ? 'text-primary bg-primary/10 hover:bg-primary/15'
-                    : 'text-muted-foreground hover:text-foreground',
-                  checkingInProgress && 'text-primary animate-pulse'
-                )}
-                onClick={handleLoadChannels}
-                disabled={channelsLoading}
-                title="Ver canales y su estado"
-              >
-                {channelsLoading || checkingInProgress ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <List className="w-3.5 h-3.5" />
-                )}
-                <span className="hidden sm:inline">
-                  {channelsLoading
-                    ? 'Cargando...'
-                    : checkingInProgress
-                    ? 'Verificando...'
-                    : channelsOpen
-                    ? 'Ocultar'
-                    : 'Ver canales'}
-                </span>
-                {channelsData && (
-                  <span className={cn(
-                    'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold ml-0.5',
-                    'bg-primary/20 text-primary'
-                    )}>
-                      {channelsData.summary.total}
-                    </span>
-                  )}
-              </Button>
-            )}
-
-            {/* Server info toggle */}
-            {result.serverInfo && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                onClick={() => setInfoExpanded(e => !e)}
-                title={infoExpanded ? 'Ocultar info' : 'Ver info del servidor'}
-              >
-                {infoExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {/* Mobile stats */}
-        <div className="sm:hidden flex items-center gap-4 mt-3 pl-11 text-sm flex-wrap">
-          <span className={cn('flex items-center gap-1 font-mono text-xs', getLatencyColor(result.responseTimeMs))}>
-            <Clock className="w-3 h-3" />
-            {formatMs(result.responseTimeMs)}
-          </span>
-          {result.channelCount !== null && (
-            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Tv className="w-3 h-3" />
-              {result.channelCount.toLocaleString()} canales
+    <article className="overflow-hidden rounded-[10px] border border-border bg-card">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-5">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <StatusLabel status={isOnline ? 'healthy' : 'down'} />
+            <span className="rounded border border-control px-[7px] py-[3px] font-mono text-[10px] tracking-[0.08em] text-[#C9CED4] uppercase">
+              {result.type}
             </span>
-          )}
-          {result.expiresAt && <ExpiryBadge expiresAt={result.expiresAt} />}
+            {si?.isTrial && (
+              <span className="rounded border border-control px-[7px] py-[3px] font-mono text-[10px] tracking-[0.08em] text-degraded">
+                TRIAL
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleCopyUrl}
+            title={`${result.url} — clic para copiar`}
+            className="max-w-full truncate text-left font-mono text-[13px] text-muted-foreground hover:text-foreground"
+          >
+            {shortUrl}
+          </button>
         </div>
-
-        {/* Error */}
-        {result.error && (
-          <div className="mt-3 ml-11 flex items-start gap-2 text-xs text-red-400/80 bg-red-500/5 rounded-lg px-3 py-2 border border-red-500/10">
-            <XCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-            <span>{result.error}</span>
-          </div>
-        )}
-
-        {/* Channels fetch error */}
-        {channelsError && channelsOpen && (
-          <div className="mt-3 ml-11 flex items-start gap-2 text-xs text-red-400/80 bg-red-500/5 rounded-lg px-3 py-2 border border-red-500/10">
-            <XCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-            <span>Error al cargar canales: {channelsError}</span>
-          </div>
-        )}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" size="icon" onClick={handleCopyUrl} aria-label="Copiar URL">
+            <Copy aria-hidden="true" />
+          </Button>
+          {si && (
+            <Button
+              variant="secondary"
+              onClick={() => setInfoExpanded(e => !e)}
+              aria-expanded={infoExpanded}
+            >
+              {infoExpanded ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+              Info del servidor
+            </Button>
+          )}
+          {isOnline && (
+            <Button variant="secondary" onClick={() => navigate('/sources', { state: { importPrefill: toPrefill(result) } })}>
+              Importar como fuente
+            </Button>
+          )}
+          {isOnline && (
+            <Button onClick={handleLoadChannels} disabled={channelsLoading}>
+              {(channelsLoading || checkingInProgress) && <Loader2 aria-hidden="true" className="animate-spin" />}
+              {channelsLoading ? 'Cargando...' : checkingInProgress ? 'Verificando...' : channelsOpen ? 'Ocultar canales' : 'Ver canales'}
+            </Button>
+          )}
+        </div>
       </div>
 
-      {/* ── Server info panel ──────────────────────────────────────────────── */}
-      {infoExpanded && result.serverInfo && (
-        <div className="border-t border-border/50 px-4 py-3 bg-muted/20">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-2 flex items-center gap-1.5">
-            <Info className="w-3 h-3" /> Información del servidor
-          </p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-            {[
-              { label: 'Host',          value: result.serverInfo.url },
-              { label: 'Usuario',       value: result.serverInfo.username },
-              { label: 'Protocolo',     value: result.serverInfo.serverProtocol || '—' },
-              { label: 'Puerto HTTP',   value: result.serverInfo.port || '—' },
-              { label: 'Puerto HTTPS',  value: result.serverInfo.httpsPort || '—' },
-              { label: 'Zona horaria',  value: result.serverInfo.timezone || '—' },
-              {
-                label: 'Conexiones',
-                value: result.serverInfo.activeConnections !== null
-                  ? `${result.serverInfo.activeConnections} / ${result.serverInfo.maxConnections ?? '∞'}`
-                  : '—',
-              },
-              { label: 'Trial', value: result.serverInfo.isTrial ? 'Sí' : 'No' },
-            ].map(({ label, value }) => (
-              <div key={label} className="min-w-0">
-                <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider">{label}</p>
-                <p className="text-xs text-foreground font-mono truncate" title={String(value)}>{value}</p>
-              </div>
-            ))}
-          </div>
-        </div>
+      <StatStrip items={account} label="Cuenta" compact className="rounded-none border-x-0 border-b-0" />
+
+      {result.error && (
+        <p role="alert" className="border-t border-border px-5 py-3 text-[13px] text-destructive">
+          {result.error}
+        </p>
+      )}
+      {channelsError && channelsOpen && (
+        <p role="alert" className="border-t border-border px-5 py-3 text-[13px] text-destructive">
+          Error al cargar canales: {channelsError}
+        </p>
       )}
 
-      {/* ── Channel health panel ───────────────────────────────────────────── */}
+      {infoExpanded && si && (
+        <dl className="grid grid-cols-2 gap-4 border-t border-border px-5 py-4 sm:grid-cols-3 lg:grid-cols-4">
+          {[
+            { label: 'Host',          value: si.url },
+            { label: 'Usuario',       value: si.username },
+            { label: 'Protocolo',     value: si.serverProtocol || '—' },
+            { label: 'Puerto HTTP',   value: si.port || '—' },
+            { label: 'Puerto HTTPS',  value: si.httpsPort || '—' },
+            { label: 'Zona horaria',  value: si.timezone || '—' },
+            { label: 'Trial',         value: si.isTrial ? 'Sí' : 'No' },
+          ].map(({ label, value }) => (
+            <div key={label} className="min-w-0">
+              <dt className="text-[11px] tracking-[0.08em] text-label uppercase">{label}</dt>
+              <dd className="truncate font-mono text-[13px]" title={String(value)}>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
       {channelsOpen && channelsData && !channelsLoading && (
         <ChannelHealthPanel
           data={channelsData}
@@ -885,76 +682,41 @@ function ResultCard({ result, index }: { result: CheckResult; index: number }) {
         />
       )}
 
-      {/* Channels loading skeleton */}
       {channelsLoading && (
-        <div className="border-t border-border/50 px-4 py-4 bg-muted/[0.08]">
-          <div className="flex items-center gap-2 mb-3">
-            <Loader2 className="w-4 h-4 animate-spin text-primary" />
-            <span className="text-xs text-muted-foreground">Obteniendo y verificando canales...</span>
-          </div>
-          <div className="space-y-1.5">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-8 rounded-lg bg-muted/40 animate-pulse"
-                style={{ animationDelay: `${i * 60}ms`, opacity: 1 - i * 0.12 }}
-              />
-            ))}
-          </div>
+        <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4">
+          <Loader2 aria-hidden="true" className="size-4 animate-spin text-primary" />
+          <span className="text-[13px] text-muted-foreground">Obteniendo canales...</span>
         </div>
       )}
-    </div>
-  )
-}
-
-// ── Summary Bar ───────────────────────────────────────────────────────────────
-
-function SummaryBar({ results }: { results: CheckResult[] }) {
-  const online  = results.filter(r => r.status === 'online').length
-  const offline = results.filter(r => r.status === 'offline').length
-  const total   = results.length
-  const avgMs   = results
-    .filter(r => r.responseTimeMs > 0)
-    .reduce((a, r, _, arr) => a + r.responseTimeMs / arr.length, 0)
-
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-      {[
-        { label: 'Total',             value: total,                                          icon: ShieldCheck,  color: 'text-primary',      bg: 'bg-primary/10' },
-        { label: 'Online',            value: online,                                         icon: CheckCircle2, color: 'text-emerald-400',   bg: 'bg-emerald-500/10' },
-        { label: 'Offline',           value: offline,                                        icon: XCircle,      color: 'text-red-400',       bg: 'bg-red-500/10' },
-        { label: 'Latencia promedio', value: avgMs > 0 ? formatMs(Math.round(avgMs)) : '—', icon: Clock,        color: getLatencyColor(Math.round(avgMs)), bg: 'bg-muted/50' },
-      ].map(({ label, value, icon: Icon, color, bg }) => (
-        <Card key={label} className="border-border/50">
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0', bg)}>
-              <Icon className={cn('w-4 h-4', color)} />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">{label}</p>
-              <p className={cn('text-xl font-bold font-mono', color)}>{value}</p>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+    </article>
   )
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function CheckerPage() {
-  const [inputText, setInputText] = useState('')
+  const navigate = useNavigate()
+  const [mode, setMode]           = useState<InputMode>('xtream')
+  const [xtHost, setXtHost]       = useState('')
+  const [xtUser, setXtUser]       = useState('')
+  const [xtPass, setXtPass]       = useState('')
+  const [m3uUrl, setM3uUrl]       = useState('')
+  const [batchText, setBatchText] = useState('')
   const [results, setResults]     = useState<CheckResult[]>([])
   const [loading, setLoading]     = useState(false)
-  const textareaRef               = useRef<HTMLTextAreaElement>(null)
+  const [recents, setRecents]     = useState<RecentCheck[]>(loadRecents)
 
-  const urlCount = parseUrls(inputText).length
+  const urls = useMemo(() => {
+    if (mode === 'xtream') {
+      return xtHost.trim() && xtUser.trim() && xtPass ? [buildXtreamUrl(xtHost, xtUser, xtPass)] : []
+    }
+    if (mode === 'm3u') return parseUrls(m3uUrl).slice(0, 1)
+    return parseUrls(batchText)
+  }, [mode, xtHost, xtUser, xtPass, m3uUrl, batchText])
 
   const handleCheck = async () => {
-    const urls = parseUrls(inputText)
     if (urls.length === 0) {
-      toast.error('Ingresá al menos una URL válida (http:// o https://)')
+      toast.error(mode === 'batch' ? 'Ingresá al menos una URL válida (http:// o https://)' : 'Completá los datos de la fuente')
       return
     }
     if (urls.length > 20) {
@@ -972,6 +734,19 @@ export default function CheckerPage() {
       const online  = data.results.filter(r => r.status === 'online').length
       const offline = data.results.filter(r => r.status === 'offline').length
       toast.success(`Verificación completa: ${online} online, ${offline} offline`)
+
+      // Recientes: solo se guarda el host, nunca usuario/contraseña ni tokens
+      const fresh: RecentCheck[] = data.results.map(r => ({
+        host: hostOf(r.url),
+        type: r.type,
+        ok: r.status === 'online',
+        result: r.status === 'online'
+          ? (isExpired(r.expiresAt) ? 'Expirada' : `Activa${r.channelCount !== null ? ` · ${r.channelCount.toLocaleString('es-AR')} canales` : ''}`)
+          : 'Offline',
+      }))
+      const next = [...fresh, ...recents.filter(x => !fresh.some(f => f.host === x.host))].slice(0, 5)
+      setRecents(next)
+      saveRecents(next)
     } catch (err: any) {
       toast.error(err?.message || 'Error al verificar las URLs')
     } finally {
@@ -980,142 +755,140 @@ export default function CheckerPage() {
   }
 
   const handleClear = () => {
-    setInputText('')
+    setXtHost(''); setXtUser(''); setXtPass('')
+    setM3uUrl('')
+    setBatchText('')
     setResults([])
-    textareaRef.current?.focus()
   }
 
+  const applyRecent = (r: RecentCheck) => {
+    setResults([])
+    if (r.type === 'xtream') { setMode('xtream'); setXtHost(r.host) }
+    else { setMode('m3u'); setM3uUrl(r.host) }
+  }
+
+  const fieldLabel = 'text-[13px] font-normal text-muted-foreground'
+  const idle = !loading && results.length === 0 && mode !== 'extract'
+
   return (
-    <div>
+    <>
       <PageHeader
         title="IPTV Checker"
-        subtitle="Verificá el estado de tus fuentes Xtream y M3U"
-        icon={ShieldCheck}
+        subtitle="Probá una cuenta Xtream o una lista M3U antes de importarla."
+        status="VERIFICADOR DE FUENTES"
         actions={
           results.length > 0 && (
-            <Button variant="ghost" size="sm" onClick={handleClear} className="text-muted-foreground">
-              <Trash2 className="w-4 h-4 mr-2" />
-              Limpiar
-            </Button>
+            <>
+              <Button variant="secondary" onClick={handleClear}>Limpiar</Button>
+            </>
           )
         }
       />
 
-      {/* Input card */}
-      <Card className="mb-6 border-border/50">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm flex items-center gap-2 text-muted-foreground font-medium">
-            <Wifi className="w-4 h-4 text-primary" />
-            URLs a verificar
-            <span className="ml-auto text-[11px] text-muted-foreground/60 font-normal">
-              Soporta Xtream Codes y M3U · Máx. 20
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="relative">
-            <textarea
-              ref={textareaRef}
-              id="checker-input"
-              value={inputText}
-              onChange={e => setInputText(e.target.value)}
-              onKeyDown={e => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleCheck()
-              }}
-              placeholder={`Pegá una o varias URLs separadas por espacios o saltos de línea:
+      <section aria-label="Datos de la fuente" className="flex flex-col gap-3.5 rounded-[10px] border border-border bg-card px-5 py-[18px]">
+        <Tabs value={mode} onValueChange={v => setMode(v as InputMode)}>
+          <TabsList aria-label="Tipo de fuente">
+            <TabsTrigger value="xtream">Xtream</TabsTrigger>
+            <TabsTrigger value="m3u">M3U</TabsTrigger>
+            <TabsTrigger value="batch">Varias URLs</TabsTrigger>
+            <TabsTrigger value="extract">Extraer de archivo</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
-http://servidor.com:8080/player_api.php?username=user&password=pass
-http://servidor.com:8080/get.php?username=user&password=pass&type=m3u_plus
-http://otro-panel.tv:25461/user/pass/...`}
-              rows={6}
-              className={cn(
-                'w-full resize-none rounded-xl border border-border bg-muted/30 px-4 py-3',
-                'text-sm font-mono text-foreground placeholder:text-muted-foreground/40',
-                'focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40',
-                'transition-all duration-200'
-              )}
-              disabled={loading}
-              spellCheck={false}
-            />
-            {urlCount > 0 && (
-              <div className="absolute bottom-3 right-3 px-2 py-0.5 rounded-md bg-primary/15 text-primary text-xs font-semibold">
-                {urlCount} URL{urlCount !== 1 ? 's' : ''}
+        {mode === 'extract' && (
+          <LinkExtractor onImport={r => navigate('/sources', { state: { importPrefill: toPrefill(r) } })} />
+        )}
+
+        {mode !== 'extract' && <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={e => { e.preventDefault(); handleCheck() }}
+        >
+          {mode === 'xtream' && (
+            <>
+              <div className="flex flex-[2_1_260px] flex-col gap-1.5">
+                <Label htmlFor="chk-host" className={fieldLabel}>Servidor</Label>
+                <Input id="chk-host" value={xtHost} onChange={e => setXtHost(e.target.value)} placeholder="http://servidor.com:8080" className="font-mono text-[13px]" disabled={loading} />
               </div>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground/60">
-              Tip: Ctrl+Enter para verificar rápido
-            </p>
-            <div className="flex items-center gap-2">
-              {inputText && (
-                <Button variant="ghost" size="sm" onClick={handleClear} className="text-muted-foreground h-8">
-                  Limpiar
-                </Button>
-              )}
-              <Button
-                id="checker-submit"
-                onClick={handleCheck}
-                disabled={loading || urlCount === 0}
-                className="h-8 px-4 gap-2"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Verificando...
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-4 h-4" />
-                    Verificar{urlCount > 0 ? ` (${urlCount})` : ''}
-                  </>
-                )}
-              </Button>
+              <div className="flex flex-[1_1_160px] flex-col gap-1.5">
+                <Label htmlFor="chk-user" className={fieldLabel}>Usuario</Label>
+                <Input id="chk-user" value={xtUser} onChange={e => setXtUser(e.target.value)} placeholder="usuario123" autoComplete="username" disabled={loading} />
+              </div>
+              <div className="flex flex-[1_1_160px] flex-col gap-1.5">
+                <Label htmlFor="chk-pass" className={fieldLabel}>Contraseña</Label>
+                <Input id="chk-pass" type="password" value={xtPass} onChange={e => setXtPass(e.target.value)} placeholder="••••••" autoComplete="current-password" disabled={loading} />
+              </div>
+            </>
+          )}
+          {mode === 'm3u' && (
+            <div className="flex flex-[1_1_480px] flex-col gap-1.5">
+              <Label htmlFor="chk-m3u" className={fieldLabel}>URL de la lista M3U</Label>
+              <Input id="chk-m3u" value={m3uUrl} onChange={e => setM3uUrl(e.target.value)} placeholder="https://…/lista.m3u" className="font-mono text-[13px]" disabled={loading} />
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          )}
+          {mode === 'batch' && (
+            <div className="flex flex-[1_1_100%] flex-col gap-1.5">
+              <Label htmlFor="chk-batch" className={fieldLabel}>URLs a verificar (separadas por espacios o saltos de línea · máx. 20)</Label>
+              <Textarea
+                id="chk-batch"
+                value={batchText}
+                onChange={e => setBatchText(e.target.value)}
+                onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleCheck() }}
+                rows={5}
+                spellCheck={false}
+                disabled={loading}
+                placeholder={'http://servidor.com:8080/player_api.php?username=user&password=pass\nhttp://servidor.com:8080/get.php?username=user&password=pass&type=m3u_plus'}
+                className="font-mono text-xs"
+              />
+            </div>
+          )}
+          <Button type="submit" size="lg" disabled={loading || urls.length === 0} className="px-[22px]">
+            {loading && <Loader2 aria-hidden="true" className="animate-spin" />}
+            {loading ? 'Verificando...' : `Verificar${urls.length > 1 ? ` (${urls.length})` : ''}`}
+          </Button>
+        </form>}
+      </section>
 
-      {/* Loading skeleton */}
-      {loading && (
-        <div className="space-y-3 mb-6">
-          {parseUrls(inputText).map((_, i) => (
-            <div
-              key={i}
-              className="h-20 rounded-xl border border-border/40 bg-muted/20 animate-pulse"
-              style={{ animationDelay: `${i * 80}ms` }}
-            />
+      {loading && mode !== 'extract' && (
+        <div role="status" aria-label="Verificando" className="flex flex-col gap-3">
+          {urls.map((_, i) => (
+            <div key={i} className="h-28 animate-pulse rounded-[10px] border border-border bg-card" style={{ animationDelay: `${i * 80}ms` }} />
           ))}
         </div>
       )}
 
-      {/* Results */}
-      {!loading && results.length > 0 && (
-        <>
-          <SummaryBar results={results} />
-          <div className="space-y-3">
-            {results.map((result, i) => (
-              <ResultCard key={result.url + i} result={result} index={i} />
-            ))}
-          </div>
-        </>
+      {idle && (
+        <section aria-label="Verificaciones recientes" className="flex flex-col gap-2.5 rounded-[10px] border border-dashed border-control p-5">
+          <span className="text-xs tracking-[0.08em] text-label uppercase">Recientes</span>
+          {recents.length === 0 ? (
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <ShieldCheck aria-hidden="true" className="size-5 shrink-0 text-label" />
+              Todavía no verificaste ninguna fuente. Ingresá los datos arriba para ver si está online, cuándo expira y el estado de cada canal.
+            </div>
+          ) : (
+            recents.map(r => (
+              <button
+                key={r.host}
+                type="button"
+                onClick={() => applyRecent(r)}
+                className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 text-left transition-colors hover:bg-raised"
+              >
+                <span className="truncate font-mono text-[13px]">{r.host}</span>
+                <span className={cn('shrink-0 text-xs')} style={{ color: r.ok ? (r.result.startsWith('Expirada') ? STATUS_COLOR.down : STATUS_COLOR.healthy) : STATUS_COLOR.down }}>
+                  {r.result}
+                </span>
+              </button>
+            ))
+          )}
+        </section>
       )}
 
-      {/* Empty state */}
-      {!loading && results.length === 0 && inputText.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
-            <ShieldCheck className="w-8 h-8 text-primary/60" />
-          </div>
-          <h3 className="text-lg font-semibold text-foreground mb-1">Verificador de fuentes IPTV</h3>
-          <p className="text-sm text-muted-foreground max-w-sm">
-            Ingresá URLs de Xtream Codes o M3U para verificar si están online,
-            ver el tiempo de respuesta, cantidad de canales y fecha de expiración.
-            En las fuentes online podés ver el estado de cada canal individualmente.
-          </p>
+      {!loading && results.length > 0 && mode !== 'extract' && (
+        <div className="flex flex-col gap-[22px]">
+          {results.map((result, i) => (
+            <ResultCard key={result.url + i} result={result} />
+          ))}
         </div>
       )}
-    </div>
+    </>
   )
 }

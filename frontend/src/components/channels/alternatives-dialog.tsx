@@ -7,11 +7,11 @@ import { Button } from '@/components/ui/button'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { HealthBadge, HealthDot } from '@/components/shared/health-badge'
+import { StatusLabel } from '@/components/shared/health-badge'
+import { LatencyBar } from '@/components/shared/latency-bar'
 import { EmptyState } from '@/components/shared/empty-state'
 import { useChannel, useAddAlternative, useRemoveAlternative, useSetPrimary } from '@/hooks/use-channels'
 import { useChannels } from '@/hooks/use-channels'
-import { formatLatency } from '@/lib/utils'
 import type { Channel } from '@/lib/types'
 import { toast } from 'sonner'
 import { Separator } from '@/components/ui/separator'
@@ -73,13 +73,13 @@ export function AlternativesDialog({ open, onOpenChange, channel }: Alternatives
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Alternativas — {channel?.name}</DialogTitle>
+          <DialogTitle className="text-xl">Alternativas — {channel?.name}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
           {isLoading ? (
             <div className="flex justify-center py-8">
-              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              <Loader2 aria-hidden="true" className="size-6 animate-spin text-label" />
             </div>
           ) : alternatives.length === 0 ? (
             <EmptyState
@@ -92,36 +92,32 @@ export function AlternativesDialog({ open, onOpenChange, channel }: Alternatives
               {alternatives.map((alt) => (
                 <div
                   key={alt.id}
-                  className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 border border-border/50"
+                  className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-background p-3"
                 >
-                  <HealthDot status={alt.health_status} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">{alt.name}</p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <HealthBadge status={alt.health_status} />
-                      <span className="text-xs text-muted-foreground">
-                        {formatLatency(alt.health_latency_ms)}
-                      </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-foreground">{alt.name}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                      <StatusLabel status={alt.health_status} />
+                      <LatencyBar status={alt.health_status} ms={alt.health_latency_ms} />
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
                     <Button
                       variant="ghost"
-                      size="sm"
                       onClick={() => handleSetPrimary(alt.id)}
                       title="Hacer principal"
-                      className="text-muted-foreground hover:text-primary h-8"
                     >
-                      <Crown className="w-3.5 h-3.5 mr-1" />
+                      <Crown aria-hidden="true" />
                       Principal
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
                       onClick={() => handleRemove(alt.id)}
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      aria-label={`Quitar alternativa ${alt.name}`}
+                      className="hover:text-destructive"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 aria-hidden="true" />
                     </Button>
                   </div>
                 </div>
@@ -134,7 +130,7 @@ export function AlternativesDialog({ open, onOpenChange, channel }: Alternatives
           {/* Add alternative */}
           <div className="flex gap-2">
             <Select value={selectedAlt} onValueChange={setSelectedAlt}>
-              <SelectTrigger className="flex-1">
+              <SelectTrigger aria-label="Canal alternativo" className="min-w-0 flex-1">
                 <SelectValue placeholder="Seleccionar canal alternativo..." />
               </SelectTrigger>
               <SelectContent>
@@ -148,9 +144,8 @@ export function AlternativesDialog({ open, onOpenChange, channel }: Alternatives
             <Button
               onClick={handleAdd}
               disabled={!selectedAlt || addAlt.isPending}
-              size="sm"
             >
-              {addAlt.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              {addAlt.isPending ? <Loader2 aria-hidden="true" className="animate-spin" /> : <Plus aria-hidden="true" />}
               Agregar
             </Button>
           </div>

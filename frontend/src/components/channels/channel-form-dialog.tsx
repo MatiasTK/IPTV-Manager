@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { Loader2 } from 'lucide-react'
 import {
@@ -123,9 +123,9 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{isEditing ? 'Editar canal' : 'Nuevo canal'}</DialogTitle>
+          <DialogTitle className="text-xl">{isEditing ? 'Editar canal' : 'Nuevo canal'}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -139,13 +139,13 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
             {/* URL - full width */}
             <div className="col-span-2 space-y-1.5">
               <Label htmlFor="ch-url">URL del Stream *</Label>
-              <Input id="ch-url" {...register('url', { required: true })} placeholder="https://..." className="font-mono text-sm" />
+              <Input id="ch-url" {...register('url', { required: true })} placeholder="https://..." className="font-mono text-[13px]" />
             </div>
 
             {/* TVG ID */}
             <div className="space-y-1.5">
               <Label htmlFor="ch-tvgid">TVG ID (EPG)</Label>
-              <Input id="ch-tvgid" {...register('tvgId')} placeholder="CNN" />
+              <Input id="ch-tvgid" className="font-mono text-[13px]" {...register('tvgId')} placeholder="CNN" />
             </div>
 
             {/* TVG Name */}
@@ -157,18 +157,18 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
             {/* Logo URL - full width */}
             <div className="col-span-2 space-y-1.5">
               <Label htmlFor="ch-logo">Logo URL</Label>
-              <Input id="ch-logo" {...register('tvgLogo')} placeholder="https://..." />
+              <Input id="ch-logo" className="font-mono text-[13px]" {...register('tvgLogo')} placeholder="https://..." />
             </div>
 
             {/* Group */}
             <div className="space-y-1.5">
-              <Label>Grupo</Label>
-              <Select value={groupIdValue} onValueChange={(v) => setValue('groupId', v)}>
-                <SelectTrigger>
+              <Label id="ch-group-label">Grupo</Label>
+              <Select value={groupIdValue || 'none'} onValueChange={(v) => setValue('groupId', v === 'none' ? '' : v)}>
+                <SelectTrigger className="w-full" aria-label="Grupo">
                   <SelectValue placeholder="Sin grupo" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Sin grupo</SelectItem>
+                  <SelectItem value="none">Sin grupo</SelectItem>
                   {groupsData?.groups.map((g) => (
                     <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
                   ))}
@@ -208,11 +208,11 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
               Cancelar
             </Button>
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {isSubmitting && <Loader2 aria-hidden="true" className="animate-spin" />}
               {isEditing ? 'Guardar cambios' : 'Crear canal'}
             </Button>
           </DialogFooter>

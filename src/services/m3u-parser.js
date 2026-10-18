@@ -170,6 +170,10 @@ function parseM3U(text) {
     // Skip other directives
     if (line.startsWith('#')) continue;
 
+    // Una URL de stream siempre trae esquema (http://, rtmp://, udp://…).
+    // Líneas sueltas como "EXTINF:-1,..." (sin '#') o texto basura se ignoran.
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(line)) continue;
+
     // This is a URL — combine with pending EXTINF
     if (currentExtInf) {
       if (!isVod(currentExtInf, line)) {

@@ -5,6 +5,12 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/** SQLite devuelve "YYYY-MM-DD HH:MM:SS" en UTC sin zona; sin esto el navegador lo toma como hora local. */
+export function parseDate(dt: string): Date {
+  const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(dt)
+  return new Date(hasZone ? dt : dt.replace(' ', 'T') + 'Z')
+}
+
 export function formatLatency(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || ms === 0) return '—'
   if (ms < 1000) return `${ms}ms`
@@ -20,7 +26,7 @@ export function formatDate(dt: string | null | undefined): string {
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-    }).format(new Date(dt))
+    }).format(parseDate(dt))
   } catch {
     return '—'
   }
@@ -29,7 +35,7 @@ export function formatDate(dt: string | null | undefined): string {
 export function formatRelativeDate(dt: string | null | undefined): string {
   if (!dt) return '—'
   try {
-    const diff = Date.now() - new Date(dt).getTime()
+    const diff = Date.now() - parseDate(dt).getTime()
     const mins = Math.floor(diff / 60000)
     if (mins < 1) return 'hace un momento'
     if (mins < 60) return `hace ${mins}m`

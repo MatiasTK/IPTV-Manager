@@ -1,110 +1,72 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router'
-import {
-  Radio, FolderOpen, Link, Copy, FileCode, Activity,
-  Settings, LogOut, Tv, ChevronLeft, ChevronRight, Menu, X, ShieldCheck
-} from 'lucide-react'
+import { Radio, FolderOpen, Link, Copy, FileCode, Activity, Settings, LogOut, Tv, Menu, ShieldCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/use-auth'
-import { useHealthStatus } from '@/hooks/use-health'
-import { HealthDot } from '@/components/shared/health-badge'
+import { useHealthStatus, useDuplicates } from '@/hooks/use-health'
+import { useSettings } from '@/hooks/use-settings'
+import { useGroups } from '@/hooks/use-groups'
+import { useSources } from '@/hooks/use-sources'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
-import type { HealthStatus } from '@/lib/types'
+import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 
 interface NavItem {
   to: string
   icon: React.ElementType
   label: string
-  badge?: number
-  showHealthDot?: boolean
+  count?: string
+  warn?: boolean
 }
 
-const navSections = [
-  {
-    label: 'Gestión',
-    items: [
-      { to: '/channels', icon: Radio, label: 'Canales' },
-      { to: '/groups', icon: FolderOpen, label: 'Grupos' },
-      { to: '/sources', icon: Link, label: 'Fuentes M3U' },
-    ] as NavItem[],
-  },
-  {
-    label: 'Herramientas',
-    items: [
-      { to: '/duplicates', icon: Copy, label: 'Duplicados' },
-      { to: '/raw-editor', icon: FileCode, label: 'Editor Raw' },
-      { to: '/checker', icon: ShieldCheck, label: 'IPTV Checker' },
-    ] as NavItem[],
-  },
-  {
-    label: 'Monitoreo',
-    items: [
-      { to: '/health', icon: Activity, label: 'Health Status', showHealthDot: true },
-    ] as NavItem[],
-  },
-  {
-    label: 'Sistema',
-    items: [
-      { to: '/settings', icon: Settings, label: 'Configuración' },
-    ] as NavItem[],
-  },
-]
-
-function NavItemComponent({
-  item,
-  collapsed,
-  healthStatus,
-}: {
-  item: NavItem
-  collapsed: boolean
-  healthStatus?: HealthStatus
-}) {
-  return (
-    <NavLink
-      to={item.to}
-      className={({ isActive }) =>
-        cn(
-          'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150',
-          'text-muted-foreground hover:text-foreground hover:bg-accent',
-          isActive && 'bg-primary/10 text-primary border-l-2 border-primary pl-[10px]',
-          collapsed && 'justify-center px-2'
-        )
-      }
-      title={collapsed ? item.label : undefined}
-    >
-      <item.icon className="w-4 h-4 flex-shrink-0" />
-      {!collapsed && (
-        <>
-          <span className="flex-1">{item.label}</span>
-          {item.showHealthDot && healthStatus && (
-            <HealthDot status={healthStatus} size="sm" />
-          )}
-        </>
-      )}
-    </NavLink>
-  )
-}
-
-function SidebarContent({
-  collapsed,
-  onCollapse,
-}: {
-  collapsed: boolean
-  onCollapse?: () => void
-}) {
+function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const { data: healthData } = useHealthStatus()
+  const { data: health } = useHealthStatus()
+  const { data: groups } = useGroups()
+  const { data: sources } = useSources()
+  const { data: settings } = useSettings()
+  // Caro de calcular en el servidor: se cachea 10 min y recién corre cuando se conoce el umbral
+  const { data: dups } = useDuplicates(Number(settings?.duplicate_threshold) || 80, {
+    enabled: !!settings,
+    staleTime: 10 * 60 * 1000,
+  })
 
-  const overallHealth: HealthStatus = healthData?.summary
-    ? healthData.summary.down > 0
-      ? 'down'
-      : healthData.summary.degraded > 0
-        ? 'degraded'
-        : 'healthy'
-    : 'unknown'
+  const fmt = (n: number | undefined) => (n === undefined ? undefined : n.toLocaleString('es-AR'))
+  const down = health?.summary.down ?? 0
+  const groupList = groups?.groups
+  const sourceList = sources?.sources
+
+  const sections: { label: string; items: NavItem[] }[] = [
+    {
+      label: 'Gestión',
+      items: [
+        { to: '/channels', icon: Radio, label: 'Canales', count: fmt(health?.summary.total) },
+        { to: '/groups', icon: FolderOpen, label: 'Grupos', count: fmt(groupList?.length) },
+        { to: '/sources', icon: Link, label: 'Fuentes M3U', count: fmt(sourceList?.length) },
+      ],
+    },
+    {
+      label: 'Herramientas',
+      items: [
+        { to: '/duplicates', icon: Copy, label: 'Duplicados', count: fmt(dups?.count) },
+        { to: '/raw-editor', icon: FileCode, label: 'Editor Raw' },
+        { to: '/checker', icon: ShieldCheck, label: 'IPTV Checker' },
+      ],
+    },
+    {
+      label: 'Monitoreo',
+      items: [
+        {
+          to: '/health',
+          icon: Activity,
+          label: 'Health Status',
+          count: down > 0 ? `${fmt(down)} caídos` : undefined,
+          warn: down > 0,
+        },
+      ],
+    },
+    { label: 'Sistema', items: [{ to: '/settings', icon: Settings, label: 'Configuración' }] },
+  ]
 
   const handleLogout = async () => {
     await logout()
@@ -112,115 +74,91 @@ function SidebarContent({
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className={cn('flex items-center p-4', collapsed ? 'justify-center' : 'justify-between')}>
-        <div className={cn('flex items-center gap-2', collapsed && 'justify-center')}>
-          <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center flex-shrink-0">
-            <Tv className="w-4 h-4 text-primary" />
-          </div>
-          {!collapsed && (
-            <span className="font-semibold text-sm text-foreground">IPTV Manager</span>
-          )}
-        </div>
-        {onCollapse && !collapsed && (
-          <button
-            onClick={onCollapse}
-            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-        )}
-        {onCollapse && collapsed && (
-          <button
-            onClick={onCollapse}
-            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors mt-1"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        )}
-      </div>
+    <nav aria-label="Principal" className="flex h-full flex-col gap-[22px] bg-sidebar px-3.5 py-5 text-foreground">
+      <NavLink to="/channels" onClick={onNavigate} className="flex items-center gap-2.5 px-2 no-underline">
+        <span className="flex size-[30px] items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <Tv aria-hidden="true" className="size-4" strokeWidth={2.2} />
+        </span>
+        <span className="flex flex-col">
+          <span className="text-sm font-bold tracking-[0.02em]">IPTV MANAGER</span>
+          <span className="font-mono text-[11px] text-label">
+            en vivo{sourceList ? ` · ${sourceList.length} ${sourceList.length === 1 ? 'fuente' : 'fuentes'}` : ''}
+          </span>
+        </span>
+      </NavLink>
 
-      <Separator className="mx-3 w-auto" />
-
-      {/* Nav */}
-      <nav className="flex-1 overflow-y-auto p-3 space-y-4">
-        {navSections.map((section) => (
-          <div key={section.label}>
-            {!collapsed && (
-              <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                {section.label}
-              </p>
-            )}
-            <div className="space-y-0.5">
-              {section.items.map((item) => (
-                <NavItemComponent
-                  key={item.to}
-                  item={item}
-                  collapsed={collapsed}
-                  healthStatus={item.showHealthDot ? overallHealth : undefined}
-                />
-              ))}
-            </div>
+      <div className="flex flex-1 flex-col gap-[22px] overflow-y-auto">
+        {sections.map((section) => (
+          <div key={section.label} className="flex flex-col gap-0.5">
+            <span className="px-2.5 pb-1.5 font-mono text-[10px] tracking-[0.12em] text-faint uppercase">
+              {section.label}
+            </span>
+            {section.items.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                onClick={onNavigate}
+                className={({ isActive }) =>
+                  cn(
+                    'flex min-h-11 items-center justify-between rounded-[7px] px-2.5 text-sm font-medium no-underline transition-colors',
+                    isActive ? 'bg-muted text-white' : 'text-muted-foreground hover:bg-raised hover:text-foreground'
+                  )
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <span className="flex items-center gap-2.5">
+                      <item.icon aria-hidden="true" className={cn('size-4', isActive && 'text-primary')} />
+                      {item.label}
+                    </span>
+                    {item.count && (
+                      <span className={cn('font-mono text-[11px]', item.warn ? 'text-destructive' : 'text-label')}>
+                        {item.count}
+                      </span>
+                    )}
+                  </>
+                )}
+              </NavLink>
+            ))}
           </div>
         ))}
-      </nav>
+      </div>
 
-      <Separator className="mx-3 w-auto" />
-
-      {/* Footer */}
-      <div className={cn('p-3', collapsed && 'flex flex-col items-center')}>
-        {!collapsed && user && (
-          <div className="px-3 py-2 mb-1">
-            <p className="text-xs font-medium text-foreground">{user.username}</p>
-            <p className="text-xs text-muted-foreground">Administrador</p>
-          </div>
-        )}
-        <Button
-          variant="ghost"
-          size={collapsed ? 'icon' : 'sm'}
-          onClick={handleLogout}
-          className={cn(
-            'text-muted-foreground hover:text-destructive w-full',
-            !collapsed && 'justify-start gap-2'
-          )}
-          title={collapsed ? 'Cerrar sesión' : undefined}
-        >
-          <LogOut className="w-4 h-4" />
-          {!collapsed && 'Cerrar sesión'}
+      <div className="flex items-center justify-between border-t border-border px-2.5 pt-3.5">
+        <span className="flex flex-col">
+          <span className="text-[13px] font-semibold">{user?.username ?? 'admin'}</span>
+          <span className="text-xs text-label">Administrador</span>
+        </span>
+        <Button variant="secondary" size="icon" onClick={handleLogout} aria-label="Cerrar sesión">
+          <LogOut aria-hidden="true" />
         </Button>
       </div>
-    </div>
+    </nav>
   )
 }
 
 export function Sidebar() {
-  const [collapsed, setCollapsed] = useState(false)
+  const [open, setOpen] = useState(false)
 
   return (
     <>
-      {/* Desktop sidebar */}
-      <aside
-        className={cn(
-          'hidden md:flex flex-col fixed left-0 top-0 bottom-0 z-30',
-          'bg-[hsl(var(--color-sidebar,240_10%_5%))] border-r border-[hsl(var(--color-sidebar-border,240_5%_13%))]',
-          'transition-all duration-300',
-          collapsed ? 'w-16' : 'w-60'
-        )}
-      >
-        <SidebarContent collapsed={collapsed} onCollapse={() => setCollapsed(!collapsed)} />
+      {/* Desktop */}
+      <aside className="fixed top-0 bottom-0 left-0 z-30 hidden w-[232px] border-r border-border bg-sidebar md:block">
+        <SidebarContent />
       </aside>
 
-      {/* Mobile sidebar via Sheet */}
+      {/* Mobile: Sheet */}
       <div className="md:hidden">
-        <Sheet>
+        <Sheet open={open} onOpenChange={setOpen}>
           <SheetTrigger asChild>
-            <Button variant="ghost" size="icon" className="fixed top-3 left-3 z-40">
-              <Menu className="w-5 h-5" />
+            <Button variant="secondary" size="icon" className="fixed top-3 left-3 z-40" aria-label="Abrir menú">
+              <Menu aria-hidden="true" />
             </Button>
           </SheetTrigger>
-          <SheetContent side="left" className="p-0 w-64 bg-[hsl(240_10%_5%)] border-r border-[hsl(240_5%_13%)]">
-            <SidebarContent collapsed={false} />
+          <SheetContent side="left" showCloseButton={false} className="w-[260px] border-r border-border bg-sidebar p-0">
+            <SheetTitle className="sr-only">Menú</SheetTitle>
+            <SheetDescription className="sr-only">Navegación principal</SheetDescription>
+            <SidebarContent onNavigate={() => setOpen(false)} />
           </SheetContent>
         </Sheet>
       </div>

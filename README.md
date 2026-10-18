@@ -62,6 +62,12 @@ npm run setup -- --username admin --password TuContraseñaSegura123!
 ### 4. Iniciar el servidor
 
 ```bash
+# Todo junto (backend + frontend con recarga, http://localhost:5173)
+npm run app
+
+# Todo en producción (compila el frontend y sirve desde :3000)
+npm run app:prod
+
 # Desarrollo (con auto-reload)
 npm run dev
 
@@ -115,7 +121,7 @@ Los duplicados se convierten en *alternativas*: no aparecen dos veces en TiviMat
 
 ### Health Checking
 
-El sistema verifica todos los streams cada **15 minutos** (configurable):
+El sistema verifica todos los streams cada **15 minutos** por defecto (el intervalo se cambia en Configuración; la verificación en curso se puede detener desde Health Status):
 
 | Estado | Indicador | Condición |
 |---|---|---|
@@ -204,6 +210,7 @@ Todos los endpoints de `/api/*` requieren autenticación (cookie de sesión + he
 | `POST` | `/api/sources/import-text` | Importar M3U desde texto |
 | `GET` | `/api/health/status` | Resumen de salud |
 | `POST` | `/api/health/check-now` | Forzar verificación de todos |
+| `POST` | `/api/health/cancel` | Detener la verificación en curso |
 | `GET` | `/api/raw/preview` | Ver M3U generado como texto |
 | `PUT` | `/api/raw/apply` | Aplicar M3U editado a la DB |
 | `GET` | `/api/settings` | Obtener configuración |

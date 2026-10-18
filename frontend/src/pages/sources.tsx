@@ -1,24 +1,29 @@
-import { useState } from 'react'
-import { Link as LinkIcon, Plus, RefreshCw, Pencil, Trash2, FileText, Loader2, Clock, Server, Eye, EyeOff } from 'lucide-react'
-import { PageHeader } from '@/components/layout/page-header'
+import { useState, useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useLocation, useNavigate } from 'react-router'
+import { Link as LinkIcon, Plus, RefreshCw, Pencil, Trash2, Loader2, Eye, EyeOff, Activity } from 'lucide-react'
+import { PageHeader } from '@/components/shared/page-header'
 import { EmptyState } from '@/components/shared/empty-state'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   useSources, useUpdateSource, useDeleteSource, useSyncSource,
   usePreviewSource, useImportUrl, useImportText, useImportXtream,
 } from '@/hooks/use-sources'
+import { useHealthStatus, useHealthChannels, useCheckNow, useCancelCheck } from '@/hooks/use-health'
+import { STATUS_COLOR } from '@/lib/status'
 import { ImportPreviewDialog } from '@/components/sources/ImportPreviewDialog'
 import { formatRelativeDate } from '@/lib/utils'
+import type { ImportPrefill } from '@/pages/checker'
 import type { Source, SourcePreviewResponse, PreviewContext } from '@/lib/types'
 import { toast } from 'sonner'
 
@@ -33,9 +38,10 @@ export default function SourcesPage() {
   const importXtream  = useImportXtream()
 
   // ── Dialog visibility ────────────────────────────────────────────────────
-  const [urlDialogOpen,    setUrlDialogOpen]    = useState(false)
-  const [importDialogOpen, setImportDialogOpen] = useState(false)
-  const [xtreamDialogOpen, setXtreamDialogOpen] = useState(false)
+  type SourceTab = 'url' | 'paste' | 'xtream'
+  const [dialogOpen,       setDialogOpen]       = useState(false)
+  const [tab,              setTab]              = useState<SourceTab>('url')
+  const [syncingId,        setSyncingId]        = useState<number | 'all' | null>(null)
   const [editSource,       setEditSource]       = useState<Source | null>(null)
   const [deleteTarget,     setDeleteTarget]     = useState<Source | null>(null)
   const [deleteChannels,   setDeleteChannels]   = useState(false)
@@ -68,6 +74,69 @@ export default function SourcesPage() {
 
   const sources = data?.sources ?? []
 
+  // ── Verificación de salud por fuente ─────────────────────────────────────
+  const qc = useQueryClient()
+  const { data: healthStatus } = useHealthStatus()
+  const { data: healthChannels } = useHealthChannels()
+  const checkNow = useCheckNow()
+  const cancelCheck = useCancelCheck()
+  const isChecking = healthStatus?.isChecking ?? false
+  const checkingSourceId = healthStatus?.checkingSourceId ?? null
+  const progress = healthStatus?.progress
+
+  const healthBySource = new Map<number, { ok: number; deg: number; down: number; total: number }>()
+  for (const ch of healthChannels?.channels ?? []) {
+    if (ch.source_id === null) continue
+    const e = healthBySource.get(ch.source_id) ?? { ok: 0, deg: 0, down: 0, total: 0 }
+    e.total++
+    if (ch.health_status === 'healthy') e.ok++
+    else if (ch.health_status === 'degraded' || ch.health_status === 'intermittent') e.deg++
+    else if (ch.health_status === 'down') e.down++
+    healthBySource.set(ch.source_id, e)
+  }
+
+  const handleCheckSource = async (src: Source) => {
+    try {
+      await checkNow.mutateAsync(src.id)
+      qc.invalidateQueries({ queryKey: ['health', 'status'] })
+      toast.success(`Verificando los canales de "${src.name}"…`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al iniciar la verificación')
+    }
+  }
+
+  // Al terminar una verificación, se refrescan los datos y se avisa el resultado de esa fuente
+  const wasChecking = useRef<{ checking: boolean; sourceId: number | null }>({ checking: false, sourceId: null })
+  useEffect(() => {
+    const prev = wasChecking.current
+    if (prev.checking && !isChecking && prev.sourceId !== null) {
+      qc.invalidateQueries({ queryKey: ['health'] })
+      qc.invalidateQueries({ queryKey: ['channels'] })
+      toast.success('Verificación de la fuente finalizada')
+    }
+    wasChecking.current = { checking: isChecking, sourceId: isChecking ? checkingSourceId : prev.sourceId }
+  }, [isChecking, checkingSourceId, qc])
+
+  // Viene del IPTV Checker ("Importar como fuente"): abre el diálogo ya completado
+  const location = useLocation()
+  const navigate = useNavigate()
+  useEffect(() => {
+    const p = (location.state as { importPrefill?: ImportPrefill } | null)?.importPrefill
+    if (!p) return
+    setEditSource(null)
+    if (p.type === 'xtream') {
+      setXtName(p.name); setXtHost(p.host ?? ''); setXtUser(p.user ?? ''); setXtPass(p.pass ?? '')
+      setXtAutoSync(false); setXtInterval('24')
+      setTab('xtream')
+    } else {
+      setSrcName(p.name); setSrcUrl(p.url ?? '')
+      setSrcAutoSync(false); setSrcInterval('24'); setSrcPriority('1'); setSrcAutoPriority(true)
+      setTab('url')
+    }
+    setDialogOpen(true)
+    navigate(location.pathname, { replace: true, state: null }) // evita reabrir al recargar
+  }, [location, navigate])
+
   // ── Edit existing source — routes to correct dialog based on type ──────────
   const openEdit = (s: Source) => {
     setEditSource(s)
@@ -79,7 +148,8 @@ export default function SourcesPage() {
       setXtPass(s.xtream_pass || '')
       setXtAutoSync(!!s.auto_sync)
       setXtInterval(String(s.sync_interval_hours))
-      setXtreamDialogOpen(true)
+      setTab('xtream')
+      setDialogOpen(true)
     } else {
       // Pre-fill URL / manual dialog fields
       setSrcName(s.name)
@@ -88,7 +158,8 @@ export default function SourcesPage() {
       setSrcInterval(String(s.sync_interval_hours))
       setSrcPriority(String(s.priority ?? 1))
       setSrcAutoPriority(s.auto_priority === 1)
-      setUrlDialogOpen(true)
+      setTab('url')
+      setDialogOpen(true)
     }
   }
 
@@ -100,7 +171,14 @@ export default function SourcesPage() {
     setSrcInterval('24')
     setSrcPriority('1')
     setSrcAutoPriority(true)
-    setUrlDialogOpen(true)
+    setImportName('Import Manual')
+    setImportContent('')
+    setXtName('Xtream Import')
+    setXtHost(''); setXtUser(''); setXtPass('')
+    setXtAutoSync(false)
+    setXtInterval('24')
+    setTab('url')
+    setDialogOpen(true)
   }
 
   const handleSaveUrl = async () => {
@@ -117,7 +195,7 @@ export default function SourcesPage() {
         autoPriority: srcAutoPriority ? 1 : 0,
       })
       toast.success('Fuente actualizada')
-      setUrlDialogOpen(false)
+      setDialogOpen(false)
       setEditSource(null)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al guardar')
@@ -141,7 +219,7 @@ export default function SourcesPage() {
         autoPriority: editSource.auto_priority ?? 1,
       })
       toast.success('Fuente Xtream actualizada')
-      setXtreamDialogOpen(false)
+      setDialogOpen(false)
       setEditSource(null)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al guardar')
@@ -164,7 +242,7 @@ export default function SourcesPage() {
         priority: Number(srcPriority) || 1,
         autoPriority: srcAutoPriority ? 1 : 0,
       })
-      setUrlDialogOpen(false)
+      setDialogOpen(false)
       setPreviewOpen(true)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al previsualizar: ' + (err as Error).message)
@@ -181,7 +259,7 @@ export default function SourcesPage() {
         name: importName.trim() || 'Import Manual',
         text: importContent,
       })
-      setImportDialogOpen(false)
+      setDialogOpen(false)
       setPreviewOpen(true)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al previsualizar')
@@ -209,7 +287,7 @@ export default function SourcesPage() {
         priority: 1,
         autoPriority: 1,
       })
-      setXtreamDialogOpen(false)
+      setDialogOpen(false)
       setPreviewOpen(true)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al conectar con Xtream')
@@ -252,16 +330,37 @@ export default function SourcesPage() {
     }
   }
 
+  const totalChannels = sources.reduce((n, x) => n + (x.channel_count ?? 0), 0)
   const isImporting = importUrl.isPending || importText.isPending || importXtream.isPending
 
   // ── Sync ─────────────────────────────────────────────────────────────────
   const handleSync = async (id: number) => {
+    setSyncingId(id)
     try {
       const res = await syncSource.mutateAsync(id)
       toast.success(`Sincronizado: ${res.imported} importados, ${res.updated} actualizados`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al sincronizar')
+    } finally {
+      setSyncingId(null)
     }
+  }
+
+  const handleSyncAll = async () => {
+    const syncable = sources.filter((x) => x.type === 'url' || x.type === 'xtream')
+    if (syncable.length === 0) return
+    setSyncingId('all')
+    let ok = 0
+    for (const src of syncable) {
+      try {
+        await syncSource.mutateAsync(src.id)
+        ok++
+      } catch (err) {
+        toast.error(`${src.name}: ${err instanceof Error ? err.message : 'Error al sincronizar'}`)
+      }
+    }
+    setSyncingId(null)
+    if (ok > 0) toast.success(`${ok} ${ok === 1 ? 'fuente sincronizada' : 'fuentes sincronizadas'}`)
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────
@@ -279,34 +378,75 @@ export default function SourcesPage() {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
+  const typeTag = (t: Source['type']) => (t === 'xtream' ? 'XTREAM' : t === 'manual' ? 'MANUAL' : 'URL')
+  const sourceLine = (x: Source) =>
+    x.type === 'xtream'
+      ? `${x.xtream_host || '—'}${x.xtream_user ? ` · ${x.xtream_user}` : ''}`
+      : x.type === 'manual' || !x.url
+        ? `Contenido pegado · ${x.channel_count.toLocaleString('es-AR')} entradas`
+        : x.url
+
+  const isEditing = !!editSource
+  const dialogTitle = isEditing ? (tab === 'xtream' ? 'Editar fuente Xtream' : 'Editar fuente') : 'Agregar fuente'
+  const pending = previewSource.isPending
+
+  let primary: React.ReactNode
+  if (isEditing) {
+    const isXt = tab === 'xtream'
+    primary = (
+      <Button
+        onClick={isXt ? handleSaveXtream : handleSaveUrl}
+        disabled={updateSource.isPending || (isXt ? !xtName.trim() || !xtHost.trim() || !xtUser.trim() : !srcName.trim())}
+      >
+        {updateSource.isPending && <Loader2 aria-hidden="true" className="animate-spin" />}
+        Guardar
+      </Button>
+    )
+  } else {
+    const disabled =
+      pending ||
+      (tab === 'url' && (!srcName.trim() || !srcUrl.trim())) ||
+      (tab === 'paste' && !importContent.trim()) ||
+      (tab === 'xtream' && (!xtHost.trim() || !xtUser.trim() || !xtPass.trim()))
+    const run = tab === 'url' ? handlePreviewUrl : tab === 'paste' ? handlePreviewText : handlePreviewXtream
+    primary = (
+      <Button onClick={run} disabled={disabled}>
+        {pending ? <Loader2 aria-hidden="true" className="animate-spin" /> : <Eye aria-hidden="true" />}
+        {pending ? (tab === 'xtream' ? 'Conectando...' : 'Cargando lista...') : 'Previsualizar'}
+      </Button>
+    )
+  }
+
+  const fieldLabel = 'text-[13px] font-normal text-muted-foreground'
+
   return (
-    <div>
+    <>
       <PageHeader
         title="Fuentes M3U"
-        subtitle="Listas importadas que se combinan en tu único link"
-        icon={LinkIcon}
+        subtitle="Listas importadas que se combinan en tu único link. Menor número = mayor prioridad."
+        status={`${sources.length} ${sources.length === 1 ? 'FUENTE' : 'FUENTES'} · ${totalChannels.toLocaleString('es-AR')} CANALES COMBINADOS`}
         actions={
           <>
-            <Button variant="outline" onClick={() => { setImportName('Import Manual'); setImportContent(''); setImportDialogOpen(true) }}>
-              <FileText className="w-4 h-4 mr-2" />
-              Pegar M3U
-            </Button>
-            <Button variant="outline" onClick={() => { setXtName('Xtream Import'); setXtHost(''); setXtUser(''); setXtPass(''); setXtAutoSync(false); setXtInterval('24'); setXtreamDialogOpen(true) }}>
-              <Server className="w-4 h-4 mr-2" />
-              Xtream
+            <Button
+              variant="secondary"
+              onClick={handleSyncAll}
+              disabled={syncingId !== null || !sources.some((x) => x.type === 'url' || x.type === 'xtream')}
+            >
+              {syncingId === 'all' && <Loader2 aria-hidden="true" className="animate-spin" />}
+              Sincronizar todas
             </Button>
             <Button onClick={openCreate}>
-              <Plus className="w-4 h-4 mr-2" />
-              Agregar URL
+              <Plus aria-hidden="true" />
+              Agregar fuente
             </Button>
           </>
         }
       />
 
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="flex flex-col gap-3">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-44 rounded-xl" />
+            <Skeleton key={i} className="h-[88px] rounded-[10px]" />
           ))}
         </div>
       ) : sources.length === 0 ? (
@@ -314,270 +454,246 @@ export default function SourcesPage() {
           icon={LinkIcon}
           title="No hay fuentes"
           description="Agregá una URL de lista M3U o pegá el contenido directamente."
-          action={{ label: 'Agregar URL', onClick: openCreate }}
+          action={{ label: 'Agregar fuente', onClick: openCreate }}
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sources.map((source) => (
-            <Card key={source.id} className="hover:border-border/80 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg">
-              <CardHeader className="pb-2">
-                <div className="flex items-start justify-between gap-2">
-                  <CardTitle className="text-sm font-semibold leading-tight">{source.name}</CardTitle>
-                  <Badge variant="outline" className="text-xs flex-shrink-0 capitalize">{source.type}</Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {source.type === 'xtream' ? (
-                  <div className="space-y-0.5">
-                    <p className="text-xs font-mono text-muted-foreground truncate" title={source.xtream_host}>
-                      {source.xtream_host || '—'}
-                    </p>
-                    <p className="text-xs text-muted-foreground/60 truncate">
-                      Usuario: <span className="font-mono">{source.xtream_user || '—'}</span>
-                    </p>
-                  </div>
-                ) : source.url ? (
-                  <p className="text-xs font-mono text-muted-foreground truncate" title={source.url}>
-                    {source.url}
-                  </p>
-                ) : null}
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    {source.last_synced_at ? formatRelativeDate(source.last_synced_at) : 'Nunca sincronizado'}
-                  </span>
-                  <Badge variant="secondary" className="text-xs">
-                    {source.channel_count.toLocaleString()} canales
-                  </Badge>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <Badge variant="outline" className="text-xs">
-                    Prioridad: {source.priority} {source.auto_priority === 1 ? '(Auto)' : '(Manual)'}
-                  </Badge>
-                  {source.auto_sync === 1 && (
-                    <span className="text-muted-foreground">
-                      Auto-sync cada {source.sync_interval_hours}h
+        <section aria-label="Fuentes" className="flex flex-col gap-3">
+          {sources.map((source) => {
+            const syncing = syncingId === source.id || syncingId === 'all'
+            const canSync = source.type === 'url' || source.type === 'xtream'
+            const autoOn = source.auto_sync === 1
+            return (
+              <article
+                key={source.id}
+                className="flex flex-wrap items-center gap-x-7 gap-y-4 rounded-[10px] border border-border bg-card px-5 py-[18px]"
+              >
+                <div className="flex min-w-0 flex-[2_1_340px] items-center gap-3.5">
+                  <span className="min-w-[34px] font-mono text-[22px] text-primary">#{source.priority}</span>
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <h2 className="text-[17px] font-bold">{source.name}</h2>
+                      <span className="rounded border border-control px-[7px] py-[3px] font-mono text-[10px] tracking-[0.08em] text-[#C9CED4]">
+                        {typeTag(source.type)}
+                      </span>
+                      <span className="font-mono text-[10px] tracking-[0.08em] text-label">
+                        {source.auto_priority === 1 ? 'PRIORIDAD AUTO' : 'PRIORIDAD MANUAL'}
+                      </span>
+                    </div>
+                    <span className="truncate font-mono text-xs text-[#7C838C]" title={sourceLine(source)}>
+                      {sourceLine(source)}
                     </span>
-                  )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 pt-1">
-                  {(source.type === 'url' || source.type === 'xtream') && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="flex-1 h-8 text-xs"
-                      onClick={() => handleSync(source.id)}
-                      disabled={syncSource.isPending}
-                    >
-                      {syncSource.isPending ? (
-                        <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="w-3 h-3 mr-1.5" />
-                      )}
+                <dl className="grid flex-[1_1_420px] grid-cols-4 gap-x-7 gap-y-1">
+                  <dt className="text-[11px] tracking-[0.08em] text-label uppercase">Canales</dt>
+                  <dt className="text-[11px] tracking-[0.08em] text-label uppercase">Salud</dt>
+                  <dt className="text-[11px] tracking-[0.08em] text-label uppercase">Auto-sync</dt>
+                  <dt className="text-[11px] tracking-[0.08em] text-label uppercase">Último sync</dt>
+                  <dd className="font-mono text-[15px]">{source.channel_count.toLocaleString('es-AR')}</dd>
+                  <dd className="flex items-center gap-2">
+                    {(() => {
+                      const h = healthBySource.get(source.id)
+                      if (!h || h.total === 0) return <span className="font-mono text-[15px] text-label">—</span>
+                      const pct = (n: number) => (n / h.total) * 100
+                      return (
+                        <>
+                          <span aria-hidden="true" className="flex h-1.5 w-14 gap-px overflow-hidden rounded-[3px] bg-border">
+                            <span style={{ width: `${pct(h.ok)}%`, background: STATUS_COLOR.healthy }} />
+                            <span style={{ width: `${pct(h.deg)}%`, background: STATUS_COLOR.degraded }} />
+                            <span style={{ width: `${pct(h.down)}%`, background: STATUS_COLOR.down }} />
+                          </span>
+                          <span className="font-mono text-[15px]" title={`${h.ok} online · ${h.deg} lentos/intermitentes · ${h.down} caídos`}>
+                            {Math.round(pct(h.ok))}%
+                          </span>
+                        </>
+                      )
+                    })()}
+                  </dd>
+                  <dd className="font-mono text-[15px]" style={{ color: autoOn ? '#5AD1A0' : '#8A929B' }}>
+                    {autoOn ? `cada ${source.sync_interval_hours} h` : 'apagado'}
+                  </dd>
+                  <dd className="font-mono text-[15px]" style={{ color: syncing ? '#F2A33A' : undefined }}>
+                    {syncing ? 'sincronizando…' : source.last_synced_at ? formatRelativeDate(source.last_synced_at) : 'nunca'}
+                  </dd>
+                </dl>
+                <div className="flex basis-full flex-wrap justify-end gap-2 border-t border-border pt-4">
+                  {source.channel_count > 0 && (
+                    isChecking && checkingSourceId === source.id ? (
+                      <Button variant="secondary" onClick={() => cancelCheck.mutate()} disabled={cancelCheck.isPending}>
+                        <Loader2 aria-hidden="true" className="animate-spin" />
+                        Detener{progress && progress.total > 0 ? ` · ${progress.checked}/${progress.total}` : ''}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleCheckSource(source)}
+                        disabled={isChecking || checkNow.isPending}
+                        title={isChecking ? 'Ya hay una verificación en curso' : undefined}
+                      >
+                        <Activity aria-hidden="true" />
+                        Verificar canales
+                      </Button>
+                    )
+                  )}
+                  {canSync && (
+                    <Button variant="secondary" onClick={() => handleSync(source.id)} disabled={syncingId !== null}>
+                      {syncing ? <Loader2 aria-hidden="true" className="animate-spin" /> : <RefreshCw aria-hidden="true" />}
                       Sincronizar
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => openEdit(source)}>
-                    <Pencil className="w-3.5 h-3.5" />
+                  <Button variant="secondary" size="icon" aria-label={`Editar ${source.name}`} onClick={() => openEdit(source)}>
+                    <Pencil aria-hidden="true" />
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => setDeleteTarget(source)}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
+                  <Button variant="destructive" size="icon" aria-label={`Eliminar ${source.name}`} onClick={() => setDeleteTarget(source)}>
+                    <Trash2 aria-hidden="true" />
                   </Button>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+              </article>
+            )
+          })}
+        </section>
       )}
 
-      {/* ── URL form dialog (CREATE → preview / EDIT → save directly) ──── */}
-      <Dialog open={urlDialogOpen} onOpenChange={setUrlDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{editSource ? 'Editar fuente' : 'Agregar fuente M3U'}</DialogTitle>
-            {!editSource && (
-              <DialogDescription>
-                Al hacer clic en "Previsualizar" se descargará la lista para que elijas qué canales importar.
-              </DialogDescription>
-            )}
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="src-name">Nombre *</Label>
-              <Input id="src-name" value={srcName} onChange={(e) => setSrcName(e.target.value)} placeholder="Mi lista" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="src-url">URL del M3U {!editSource && '*'}</Label>
-              <Input id="src-url" value={srcUrl} onChange={(e) => setSrcUrl(e.target.value)} placeholder="https://..." className="font-mono text-sm" />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label htmlFor="src-autosync">Auto-sync</Label>
-              <Switch id="src-autosync" checked={srcAutoSync} onCheckedChange={setSrcAutoSync} />
-            </div>
-            {srcAutoSync && (
-              <div className="space-y-1.5">
-                <Label htmlFor="src-interval">Intervalo (horas)</Label>
-                <Input id="src-interval" type="number" min="1" value={srcInterval} onChange={(e) => setSrcInterval(e.target.value)} />
-              </div>
-            )}
-            <div className="flex items-center justify-between">
-              <Label htmlFor="src-autopriority">Prioridad automática</Label>
-              <Switch id="src-autopriority" checked={srcAutoPriority} onCheckedChange={setSrcAutoPriority} />
-            </div>
-            {!srcAutoPriority && (
-              <div className="space-y-1.5">
-                <Label htmlFor="src-priority">Prioridad (1 = Mayor prioridad)</Label>
-                <Input id="src-priority" type="number" min="1" value={srcPriority} onChange={(e) => setSrcPriority(e.target.value)} />
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setUrlDialogOpen(false)}>Cancelar</Button>
-            {editSource ? (
-              <Button onClick={handleSaveUrl} disabled={!srcName.trim() || updateSource.isPending}>
-                {updateSource.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Guardar
-              </Button>
-            ) : (
-              <Button
-                onClick={handlePreviewUrl}
-                disabled={!srcName.trim() || !srcUrl.trim() || previewSource.isPending}
-              >
-                {previewSource.isPending
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Cargando lista...</>
-                  : <><Eye className="w-4 h-4 mr-2" />Previsualizar</>
-                }
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <section
+        aria-label="Cómo se combinan"
+        className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-[10px] border border-dashed border-control px-5 py-4 text-[13px] text-muted-foreground"
+      >
+        <span className="font-mono text-primary">MERGE</span>
+        <span className="flex-[1_1_400px] leading-normal">
+          Si un canal existe en varias fuentes, se usa el de mayor prioridad y los demás quedan como alternativas. Con
+          prioridad automática, gana el stream con mejor latencia.
+        </span>
+      </section>
 
-      {/* ── Import text dialog ─────────────────────────────────────────────── */}
-      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-        <DialogContent className="max-w-2xl">
+      {/* ── Add / edit dialog ───────────────────────────────────────────────── */}
+      <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditSource(null) }}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[600px]">
           <DialogHeader>
-            <DialogTitle>Pegar contenido M3U</DialogTitle>
+            <DialogTitle className="text-xl">{dialogTitle}</DialogTitle>
             <DialogDescription>
-              Pegá el contenido de tu archivo .m3u. Podrás elegir qué canales importar en el siguiente paso.
+              {isEditing
+                ? tab === 'xtream'
+                  ? 'Editá las credenciales y configuración de esta fuente Xtream.'
+                  : 'Editá los datos de esta fuente. No se vuelve a importar.'
+                : 'Al previsualizar se descarga la lista para que elijas qué canales importar.'}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="import-name">Nombre de la fuente</Label>
-              <Input id="import-name" value={importName} onChange={(e) => setImportName(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="import-content">Contenido M3U</Label>
-              <Textarea
-                id="import-content"
-                value={importContent}
-                onChange={(e) => setImportContent(e.target.value)}
-                className="font-mono text-xs min-h-64"
-                placeholder={`#EXTM3U\n#EXTINF:-1 tvg-id="..." tvg-name="..." group-title="...",Canal 1\nhttp://...`}
-                spellCheck={false}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setImportDialogOpen(false)}>Cancelar</Button>
-            <Button onClick={handlePreviewText} disabled={!importContent.trim() || previewSource.isPending}>
-              {previewSource.isPending
-                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Procesando...</>
-                : <><Eye className="w-4 h-4 mr-2" />Previsualizar</>
-              }
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
-      {/* ── Xtream import/edit dialog ────────────────────────────────────────── */}
-      <Dialog open={xtreamDialogOpen} onOpenChange={(open) => { setXtreamDialogOpen(open); if (!open) setEditSource(null) }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{editSource ? 'Editar fuente Xtream' : 'Agregar fuente Xtream Codes'}</DialogTitle>
-            <DialogDescription>
-              {editSource
-                ? 'Editá las credenciales y configuración de esta fuente Xtream.'
-                : 'Ingresá las credenciales. Se conectará al panel para previsualizar los canales antes de importar.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="xt-name">Nombre de la fuente</Label>
-              <Input id="xt-name" value={xtName} onChange={(e) => setXtName(e.target.value)} placeholder="Mi Xtream" />
+          {!isEditing && (
+            <Tabs value={tab} onValueChange={(v) => setTab(v as SourceTab)}>
+              <TabsList aria-label="Tipo de fuente" className="w-full">
+                <TabsTrigger value="url">URL</TabsTrigger>
+                <TabsTrigger value="paste">Pegar M3U</TabsTrigger>
+                <TabsTrigger value="xtream">Xtream</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
+
+          {tab === 'url' && (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="src-name" className={fieldLabel}>Nombre</Label>
+                <Input id="src-name" value={srcName} onChange={(e) => setSrcName(e.target.value)} placeholder="Mi lista" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="src-url" className={fieldLabel}>URL de la lista</Label>
+                <Input id="src-url" value={srcUrl} onChange={(e) => setSrcUrl(e.target.value)} placeholder="https://…/lista.m3u" className="font-mono text-[13px]" />
+              </div>
+              <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-3">
+                <label className="flex min-h-11 cursor-pointer items-center gap-2.5 text-[13px] text-[#C9CED4]">
+                  <Checkbox checked={srcAutoSync} onCheckedChange={(c) => setSrcAutoSync(c === true)} />
+                  Auto-sync
+                </label>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="src-interval" className={fieldLabel}>Intervalo (horas)</Label>
+                  <Input id="src-interval" type="number" min="1" value={srcInterval} disabled={!srcAutoSync} onChange={(e) => setSrcInterval(e.target.value)} className="font-mono text-[13px]" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="src-priority" className={fieldLabel}>Prioridad</Label>
+                  <Input id="src-priority" type="number" min="1" value={srcPriority} disabled={srcAutoPriority} onChange={(e) => setSrcPriority(e.target.value)} className="font-mono text-[13px]" />
+                </div>
+              </div>
+              <label className="flex min-h-11 cursor-pointer items-center gap-2.5 text-[13px] text-[#C9CED4]">
+                <Checkbox checked={srcAutoPriority} onCheckedChange={(c) => setSrcAutoPriority(c === true)} />
+                Prioridad automática (gana el stream con mejor latencia)
+              </label>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="xt-host">URL del servidor *</Label>
-              <Input id="xt-host" value={xtHost} onChange={(e) => setXtHost(e.target.value)} placeholder="http://servidor.com:8080" className="font-mono text-sm" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="xt-user">Usuario *</Label>
-              <Input id="xt-user" value={xtUser} onChange={(e) => setXtUser(e.target.value)} placeholder="usuario123" autoComplete="username" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="xt-pass">Contraseña {!editSource && '*'}</Label>
-              <div className="relative">
-                <Input
-                  id="xt-pass"
-                  type={xtShowPass ? 'text' : 'password'}
-                  value={xtPass}
-                  onChange={(e) => setXtPass(e.target.value)}
-                  placeholder={editSource ? '(sin cambios)' : '••••••••'}
-                  autoComplete="current-password"
-                  className="pr-10"
+          )}
+
+          {tab === 'paste' && (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="import-name" className={fieldLabel}>Nombre de la fuente</Label>
+                <Input id="import-name" value={importName} onChange={(e) => setImportName(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="import-content" className={fieldLabel}>Contenido M3U</Label>
+                <Textarea
+                  id="import-content"
+                  value={importContent}
+                  onChange={(e) => setImportContent(e.target.value)}
+                  className="min-h-48 font-mono text-xs"
+                  placeholder={`#EXTM3U\n#EXTINF:-1 tvg-id="..." tvg-name="..." group-title="...",Canal 1\nhttp://...`}
+                  spellCheck={false}
                 />
-                <button
-                  type="button"
-                  onClick={() => setXtShowPass(v => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                  tabIndex={-1}
-                  title={xtShowPass ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                >
-                  {xtShowPass
-                    ? <EyeOff className="w-4 h-4" />
-                    : <Eye className="w-4 h-4" />
-                  }
-                </button>
               </div>
             </div>
-            <div className="flex items-center justify-between">
-              <Label htmlFor="xt-autosync">Auto-sync</Label>
-              <Switch id="xt-autosync" checked={xtAutoSync} onCheckedChange={setXtAutoSync} />
-            </div>
-            {xtAutoSync && (
-              <div className="space-y-1.5">
-                <Label htmlFor="xt-interval">Intervalo (horas)</Label>
-                <Input id="xt-interval" type="number" min="1" value={xtInterval} onChange={(e) => setXtInterval(e.target.value)} />
+          )}
+
+          {tab === 'xtream' && (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="xt-name" className={fieldLabel}>Nombre de la fuente</Label>
+                <Input id="xt-name" value={xtName} onChange={(e) => setXtName(e.target.value)} placeholder="Mi Xtream" />
               </div>
-            )}
-          </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="xt-host" className={fieldLabel}>URL del servidor</Label>
+                <Input id="xt-host" value={xtHost} onChange={(e) => setXtHost(e.target.value)} placeholder="http://servidor.com:8080" className="font-mono text-[13px]" />
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="xt-user" className={fieldLabel}>Usuario</Label>
+                  <Input id="xt-user" value={xtUser} onChange={(e) => setXtUser(e.target.value)} placeholder="usuario123" autoComplete="username" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="xt-pass" className={fieldLabel}>Contraseña</Label>
+                  <div className="relative">
+                    <Input
+                      id="xt-pass"
+                      type={xtShowPass ? 'text' : 'password'}
+                      value={xtPass}
+                      onChange={(e) => setXtPass(e.target.value)}
+                      placeholder={editSource ? '(sin cambios)' : '••••••••'}
+                      autoComplete="current-password"
+                      className="pr-12"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setXtShowPass((v) => !v)}
+                      className="absolute top-1/2 right-1 flex size-10 -translate-y-1/2 items-center justify-center rounded-md text-label transition-colors hover:text-foreground"
+                      aria-label={xtShowPass ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                    >
+                      {xtShowPass ? <EyeOff aria-hidden="true" className="size-4" /> : <Eye aria-hidden="true" className="size-4" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
+                <label className="flex min-h-11 cursor-pointer items-center gap-2.5 text-[13px] text-[#C9CED4]">
+                  <Checkbox checked={xtAutoSync} onCheckedChange={(c) => setXtAutoSync(c === true)} />
+                  Auto-sync
+                </label>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="xt-interval" className={fieldLabel}>Intervalo (horas)</Label>
+                  <Input id="xt-interval" type="number" min="1" value={xtInterval} disabled={!xtAutoSync} onChange={(e) => setXtInterval(e.target.value)} className="font-mono text-[13px]" />
+                </div>
+              </div>
+            </div>
+          )}
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setXtreamDialogOpen(false); setEditSource(null) }}>Cancelar</Button>
-            {editSource ? (
-              <Button
-                onClick={handleSaveXtream}
-                disabled={!xtName.trim() || !xtHost.trim() || !xtUser.trim() || updateSource.isPending}
-              >
-                {updateSource.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Guardar
-              </Button>
-            ) : (
-              <Button
-                onClick={handlePreviewXtream}
-                disabled={!xtHost.trim() || !xtUser.trim() || !xtPass.trim() || previewSource.isPending}
-              >
-                {previewSource.isPending
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Conectando...</>
-                  : <><Eye className="w-4 h-4 mr-2" />Previsualizar</>
-                }
-              </Button>
-            )}
+            <Button variant="secondary" onClick={() => { setDialogOpen(false); setEditSource(null) }}>Cancelar</Button>
+            {primary}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -599,40 +715,40 @@ export default function SourcesPage() {
 
       {/* ── Delete dialog ─────────────────────────────────────────────────── */}
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteChannels(false) } }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Eliminar fuente</DialogTitle>
+            <DialogTitle className="text-xl">Eliminar fuente</DialogTitle>
             <DialogDescription>
               ¿Estás seguro de que deseas eliminar la fuente "{deleteTarget?.name}"?
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <div className="flex items-center space-x-3 bg-muted/50 p-3 rounded-lg border border-border">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-3 rounded-lg border border-border bg-background p-3">
               <Switch id="delete-channels-toggle" checked={deleteChannels} onCheckedChange={setDeleteChannels} />
               <div className="space-y-0.5">
-                <Label htmlFor="delete-channels-toggle" className="text-sm font-medium cursor-pointer">
+                <Label htmlFor="delete-channels-toggle" className="text-sm font-medium">
                   Eliminar canales importados
                 </Label>
                 <p className="text-xs text-muted-foreground">Borra todos los canales asociados a esta lista</p>
               </div>
             </div>
             {!deleteChannels && (
-              <p className="text-xs text-muted-foreground mt-2 px-1">
-                Nota: Si no los eliminas, los canales se conservarán como canales manuales.
+              <p className="px-1 text-xs text-muted-foreground">
+                Nota: si no los eliminás, los canales se conservarán como canales manuales.
               </p>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setDeleteTarget(null); setDeleteChannels(false) }}>
+            <Button variant="secondary" onClick={() => { setDeleteTarget(null); setDeleteChannels(false) }}>
               Cancelar
             </Button>
             <Button variant="destructive" onClick={handleDelete} disabled={deleteSource.isPending}>
-              {deleteSource.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {deleteSource.isPending && <Loader2 aria-hidden="true" className="animate-spin" />}
               Eliminar
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }

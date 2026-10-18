@@ -538,6 +538,10 @@ function probeStream(streamUrl, timeoutMs, slowThreshold) {
       return resolve({ health: 'offline', latencyMs: 0 });
     }
 
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return resolve({ health: 'offline', latencyMs: 0 });
+    }
+
     const transport = parsed.protocol === 'https:' ? https : http;
     const start     = Date.now();
     let done        = false;

@@ -1,13 +1,11 @@
-import { useState, useEffect } from 'react'
-import { FolderOpen, Plus, Pencil, Trash2, ArrowUp, ArrowDown, Loader2, Sparkles } from 'lucide-react'
-import { PageHeader } from '@/components/layout/page-header'
+import { useState } from 'react'
+import { FolderOpen, Plus, Pencil, Trash2, ArrowUp, ArrowDown, Loader2 } from 'lucide-react'
+import { PageHeader } from '@/components/shared/page-header'
 import { EmptyState } from '@/components/shared/empty-state'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -20,6 +18,8 @@ import {
   useGroups, useCreateGroup, useUpdateGroup, useDeleteGroup, useReorderGroups,
   useAutoSuggestGroups, useApplyAutoSuggest, useDeleteEmptyGroups
 } from '@/hooks/use-groups'
+import { useHealthChannels } from '@/hooks/use-health'
+import { STATUS_COLOR } from '@/lib/status'
 import type { Group } from '@/lib/types'
 import { toast } from 'sonner'
 
@@ -38,25 +38,39 @@ export default function GroupsPage() {
   const [deleteEmptyConfirmOpen, setDeleteEmptyConfirmOpen] = useState(false)
   const [name, setName] = useState('')
 
-  // Auto-suggest states
-  const [suggestOpen, setSuggestOpen] = useState(false)
-  const [selectedSuggestGroups, setSelectedSuggestGroups] = useState<Record<string, boolean>>({})
-
-  const { data: suggestData, isLoading: suggestLoading } = useAutoSuggestGroups(suggestOpen)
+  // Auto-suggest (panel lateral)
+  const { data: suggestData, isLoading: suggestLoading } = useAutoSuggestGroups(true)
   const applySuggest = useApplyAutoSuggest()
+  const { data: healthData } = useHealthChannels()
 
   const groups = data?.groups ?? []
   const emptyGroupsCount = groups.filter((g) => g.channel_count === 0).length
+  const suggestions = suggestData?.suggestions ?? []
+  const suggestedChannels = suggestions.reduce((n, x) => n + x.channels.length, 0)
 
-  useEffect(() => {
-    if (suggestData?.suggestions) {
-      const initial: Record<string, boolean> = {}
-      suggestData.suggestions.forEach((s) => {
-        initial[s.groupName] = true
-      })
-      setSelectedSuggestGroups(initial)
+  // Salud por grupo, derivada de /api/health/channels
+  const healthByGroup = new Map<string, { ok: number; deg: number; down: number; total: number }>()
+  for (const ch of healthData?.channels ?? []) {
+    if (!ch.group_name) continue
+    const e = healthByGroup.get(ch.group_name) ?? { ok: 0, deg: 0, down: 0, total: 0 }
+    e.total++
+    if (ch.health_status === 'healthy') e.ok++
+    else if (ch.health_status === 'degraded' || ch.health_status === 'intermittent') e.deg++
+    else if (ch.health_status === 'down') e.down++
+    healthByGroup.set(ch.group_name, e)
+  }
+
+  const handleApply = async (items: typeof suggestions) => {
+    if (items.length === 0) return
+    try {
+      await applySuggest.mutateAsync(
+        items.map((x) => ({ groupName: x.groupName, channelIds: x.channels.map((ch) => ch.id) }))
+      )
+      toast.success('Agrupamientos aplicados correctamente')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al aplicar agrupamiento')
     }
-  }, [suggestData])
+  }
 
   const handleOpenCreate = () => {
     setEditGroup(null)
@@ -125,129 +139,151 @@ export default function GroupsPage() {
     }
   }
 
+  const sortedOrderLabel = (idx: number) => String(idx + 1).padStart(2, '0')
+
   return (
-    <div>
+    <>
       <PageHeader
         title="Grupos"
-        subtitle="Organización de canales por categorías"
-        icon={FolderOpen}
+        subtitle="El orden de esta lista es el orden en que aparecen en TiviMate."
+        status={`${groups.length} ${groups.length === 1 ? 'GRUPO' : 'GRUPOS'} · ${emptyGroupsCount} ${emptyGroupsCount === 1 ? 'VACÍO' : 'VACÍOS'}`}
         actions={
-          <div className="flex gap-2">
+          <>
             {emptyGroupsCount > 0 && (
-              <Button
-                variant="destructive"
-                onClick={() => setDeleteEmptyConfirmOpen(true)}
-                disabled={deleteEmptyGroups.isPending}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Eliminar vacíos ({emptyGroupsCount})
+              <Button variant="destructive" onClick={() => setDeleteEmptyConfirmOpen(true)} disabled={deleteEmptyGroups.isPending}>
+                <Trash2 aria-hidden="true" />
+                Eliminar grupos vacíos ({emptyGroupsCount})
               </Button>
             )}
-            <Button variant="outline" onClick={() => setSuggestOpen(true)}>
-              <Sparkles className="w-4 h-4 mr-2" />
-              Autogrupar canales
-            </Button>
             <Button onClick={handleOpenCreate}>
-              <Plus className="w-4 h-4 mr-2" />
-              Crear grupo
+              <Plus aria-hidden="true" />
+              Nuevo grupo
             </Button>
-          </div>
+          </>
         }
       />
 
-      <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent border-border">
-              <TableHead>Grupo</TableHead>
-              <TableHead className="w-24">Canales</TableHead>
-              <TableHead className="w-24">Orden</TableHead>
-              <TableHead className="w-32">Acciones</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              Array.from({ length: 4 }).map((_, i) => (
-                <TableRow key={i}>
-                  {Array.from({ length: 4 }).map((_, j) => (
-                    <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : groups.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4}>
-                  <EmptyState
-                    icon={FolderOpen}
-                    title="No hay grupos"
-                    description="Los grupos se crean automáticamente al importar listas."
-                    action={{ label: 'Crear grupo', onClick: handleOpenCreate }}
-                  />
-                </TableCell>
+      <div className="flex flex-wrap items-start gap-[22px]">
+        <section aria-label="Lista de grupos" className="min-w-0 flex-[2_1_560px] overflow-hidden rounded-[10px] border border-border bg-card">
+          <Table className="min-w-[640px]">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-16 px-4">Orden</TableHead>
+                <TableHead>Grupo</TableHead>
+                <TableHead className="text-right">Canales</TableHead>
+                <TableHead className="w-[28%]">Salud</TableHead>
+                <TableHead className="w-[200px] text-right"><span className="pr-2">Acciones</span></TableHead>
               </TableRow>
-            ) : (
-              groups.map((group, idx) => (
-                <TableRow key={group.id}>
-                  <TableCell className="font-medium">{group.name}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{group.channel_count}</Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-sm font-mono">
-                    #{group.sort_order}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        disabled={idx === 0}
-                        onClick={() => handleReorder(idx, 'up')}
-                      >
-                        <ArrowUp className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        disabled={idx === groups.length - 1}
-                        onClick={() => handleReorder(idx, 'down')}
-                      >
-                        <ArrowDown className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => handleOpenEdit(group)}
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        onClick={() => setDeleteTarget(group)}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <TableRow key={i}>
+                    {Array.from({ length: 5 }).map((_, j) => (
+                      <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : groups.length === 0 ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={5}>
+                    <EmptyState
+                      icon={FolderOpen}
+                      title="No hay grupos"
+                      description="Los grupos se crean automáticamente al importar listas."
+                      action={{ label: 'Crear grupo', onClick: handleOpenCreate }}
+                    />
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+              ) : (
+                groups.map((group, idx) => {
+                  const h = healthByGroup.get(group.name)
+                  const pct = (n: number) => (h && h.total > 0 ? (n / h.total) * 100 : 0)
+                  return (
+                    <TableRow key={group.id} className="h-14">
+                      <TableCell className="px-4 font-mono text-xs text-label">{sortedOrderLabel(idx)}</TableCell>
+                      <TableCell className="font-semibold">{group.name}</TableCell>
+                      <TableCell className="text-right font-mono text-[#C9CED4]">
+                        {group.channel_count === 0 ? <span className="text-label">vacío</span> : group.channel_count.toLocaleString('es-AR')}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2.5">
+                          <div aria-hidden="true" className="flex h-1.5 flex-1 gap-px overflow-hidden rounded-[3px] bg-border">
+                            <span style={{ width: `${pct(h?.ok ?? 0)}%`, background: STATUS_COLOR.healthy }} />
+                            <span style={{ width: `${pct(h?.deg ?? 0)}%`, background: STATUS_COLOR.degraded }} />
+                            <span style={{ width: `${pct(h?.down ?? 0)}%`, background: STATUS_COLOR.down }} />
+                          </div>
+                          <span className="min-w-9 font-mono text-[11px] text-label">
+                            {h && h.total > 0 ? `${Math.round(pct(h.ok))}%` : '—'}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button variant="secondary" size="icon-sm" aria-label={`Subir ${group.name}`} disabled={idx === 0 || reorderGroups.isPending} onClick={() => handleReorder(idx, 'up')}>
+                            <ArrowUp aria-hidden="true" />
+                          </Button>
+                          <Button variant="secondary" size="icon-sm" aria-label={`Bajar ${group.name}`} disabled={idx === groups.length - 1 || reorderGroups.isPending} onClick={() => handleReorder(idx, 'down')}>
+                            <ArrowDown aria-hidden="true" />
+                          </Button>
+                          <Button variant="secondary" size="icon-sm" aria-label={`Editar ${group.name}`} onClick={() => handleOpenEdit(group)}>
+                            <Pencil aria-hidden="true" />
+                          </Button>
+                          <Button variant="destructive" size="icon-sm" aria-label={`Eliminar ${group.name}`} onClick={() => setDeleteTarget(group)}>
+                            <Trash2 aria-hidden="true" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })
+              )}
+            </TableBody>
+          </Table>
+        </section>
+
+        <aside aria-label="Sugerencias de agrupamiento" className="flex min-w-0 flex-[1_1_300px] flex-col gap-3.5 rounded-[10px] border border-border bg-card p-[18px]">
+          <div className="flex flex-col gap-1">
+            <span className="font-mono text-[11px] text-primary">AUTO-AGRUPAMIENTO</span>
+            <h2 className="text-[17px] font-bold">
+              {suggestLoading ? 'Analizando canales…' : suggestions.length === 0 ? 'Todo agrupado' : `${suggestedChannels.toLocaleString('es-AR')} canales sin grupo`}
+            </h2>
+            <span className="text-[13px] leading-snug text-label">
+              {suggestions.length === 0 && !suggestLoading
+                ? 'No hay canales sin grupo para sugerir.'
+                : 'Sugerencias según el nombre de cada canal.'}
+            </span>
+          </div>
+          {suggestLoading && <Loader2 aria-label="Cargando" className="mx-auto size-5 animate-spin text-label" />}
+          {suggestions.map((x) => (
+            <div key={x.groupName} className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-sm font-semibold">{x.groupName}</span>
+                <span className="truncate text-xs text-label">{x.channels.slice(0, 3).map((ch) => ch.name).join(', ')}{x.channels.length > 3 ? ' +' : ''}</span>
+              </span>
+              <span className="font-mono text-xs text-[#C9CED4]">{x.channels.length}</span>
+              <Button variant="secondary" size="sm" onClick={() => handleApply([x])} disabled={applySuggest.isPending}>
+                Aplicar
+              </Button>
+            </div>
+          ))}
+          {suggestions.length > 0 && (
+            <Button onClick={() => handleApply(suggestions)} disabled={applySuggest.isPending}>
+              {applySuggest.isPending && <Loader2 aria-hidden="true" className="animate-spin" />}
+              Aplicar todas
+            </Button>
+          )}
+        </aside>
       </div>
 
       {/* Form dialog */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>{editGroup ? 'Editar grupo' : 'Nuevo grupo'}</DialogTitle>
+            <DialogTitle className="text-xl">{editGroup ? 'Editar grupo' : 'Nuevo grupo'}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-1.5 py-2">
-            <Label htmlFor="group-name">Nombre del grupo</Label>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="group-name" className="text-[13px] font-normal text-muted-foreground">Nombre del grupo</Label>
             <Input
               id="group-name"
               value={name}
@@ -258,14 +294,9 @@ export default function GroupsPage() {
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setFormOpen(false)}>Cancelar</Button>
-            <Button
-              onClick={handleSave}
-              disabled={!name.trim() || createGroup.isPending || updateGroup.isPending}
-            >
-              {(createGroup.isPending || updateGroup.isPending) && (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              )}
+            <Button variant="secondary" onClick={() => setFormOpen(false)}>Cancelar</Button>
+            <Button onClick={handleSave} disabled={!name.trim() || createGroup.isPending || updateGroup.isPending}>
+              {(createGroup.isPending || updateGroup.isPending) && <Loader2 aria-hidden="true" className="animate-spin" />}
               {editGroup ? 'Guardar' : 'Crear'}
             </Button>
           </DialogFooter>
@@ -274,131 +305,32 @@ export default function GroupsPage() {
 
       {/* Delete group dialog */}
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteChannels(false) } }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Eliminar grupo</DialogTitle>
+            <DialogTitle className="text-xl">Eliminar grupo</DialogTitle>
           </DialogHeader>
-          <div className="py-4 space-y-4">
+          <div className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
               ¿Estás seguro de que deseas eliminar el grupo "{deleteTarget?.name}"?
             </p>
-            
-            <div className="flex items-center space-x-3 bg-muted/50 p-3 rounded-lg border border-border">
+            <div className="flex items-center gap-3 rounded-lg border border-border bg-background p-3">
               <Switch id="delete-channels-toggle" checked={deleteChannels} onCheckedChange={setDeleteChannels} />
               <div className="space-y-0.5">
-                <Label htmlFor="delete-channels-toggle" className="text-sm font-medium cursor-pointer">
-                  Eliminar canales del grupo
-                </Label>
+                <Label htmlFor="delete-channels-toggle" className="text-sm font-medium">Eliminar canales del grupo</Label>
                 <p className="text-xs text-muted-foreground">Borra todos los canales asociados a esta categoría</p>
               </div>
             </div>
             {!deleteChannels && (
-              <p className="text-xs text-muted-foreground px-1">
-                Nota: Si no los eliminas, los canales se conservarán y quedarán sin grupo asignado.
+              <p className="px-1 text-xs text-muted-foreground">
+                Nota: si no los eliminás, los canales se conservarán y quedarán sin grupo asignado.
               </p>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setDeleteTarget(null); setDeleteChannels(false) }}>
-              Cancelar
-            </Button>
+            <Button variant="secondary" onClick={() => { setDeleteTarget(null); setDeleteChannels(false) }}>Cancelar</Button>
             <Button variant="destructive" onClick={handleDelete} disabled={deleteGroup.isPending}>
-              {deleteGroup.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {deleteGroup.isPending && <Loader2 aria-hidden="true" className="animate-spin" />}
               Eliminar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Auto Suggest Dialog */}
-      <Dialog open={suggestOpen} onOpenChange={setSuggestOpen}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Sugerencias de Agrupamiento Automático</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <p className="text-sm text-muted-foreground">
-              Hemos analizado tus canales sin grupo y te sugerimos las siguientes categorías según sus nombres.
-            </p>
-
-            {suggestLoading ? (
-              <div className="flex flex-col items-center justify-center py-8 space-y-2">
-                <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                <span className="text-sm text-muted-foreground">Analizando canales...</span>
-              </div>
-            ) : !suggestData?.suggestions || suggestData.suggestions.length === 0 ? (
-              <div className="text-center py-6">
-                <span className="text-sm text-muted-foreground">No se encontraron canales sin grupo para agrupar automáticamente.</span>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {suggestData.suggestions.map((s) => {
-                  const isChecked = !!selectedSuggestGroups[s.groupName]
-                  return (
-                    <div key={s.groupName} className="border border-border rounded-lg p-3 bg-muted/20 space-y-2">
-                      <div className="flex items-center justify-between border-b border-border/50 pb-2">
-                        <div className="flex items-center gap-2">
-                          <Checkbox
-                            id={`group-chk-${s.groupName}`}
-                            checked={isChecked}
-                            onCheckedChange={(checked) => {
-                              setSelectedSuggestGroups((prev) => ({
-                                ...prev,
-                                [s.groupName]: checked === true,
-                              }))
-                            }}
-                          />
-                          <Label htmlFor={`group-chk-${s.groupName}`} className="font-semibold text-sm cursor-pointer ml-1.5">
-                            {s.groupName}
-                          </Label>
-                        </div>
-                        <Badge variant="secondary">{s.channels.length} {s.channels.length === 1 ? 'canal' : 'canales'}</Badge>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        {s.channels.map((ch) => (
-                          <Badge key={ch.id} variant="outline" className="text-xs font-normal">
-                            {ch.name}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSuggestOpen(false)}>
-              Cancelar
-            </Button>
-            <Button
-              disabled={
-                suggestLoading ||
-                !suggestData?.suggestions ||
-                suggestData.suggestions.length === 0 ||
-                applySuggest.isPending ||
-                !Object.values(selectedSuggestGroups).some(Boolean)
-              }
-              onClick={async () => {
-                if (!suggestData?.suggestions) return
-                const payload = suggestData.suggestions
-                  .filter((s) => selectedSuggestGroups[s.groupName])
-                  .map((s) => ({
-                    groupName: s.groupName,
-                    channelIds: s.channels.map((ch) => ch.id),
-                  }))
-
-                try {
-                  await applySuggest.mutateAsync(payload)
-                  toast.success('Agrupamientos aplicados correctamente')
-                  setSuggestOpen(false)
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : 'Error al aplicar agrupamiento')
-                }
-              }}
-            >
-              {applySuggest.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Aplicar {Object.values(selectedSuggestGroups).filter(Boolean).length} grupos
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -413,6 +345,6 @@ export default function GroupsPage() {
         onConfirm={handleDeleteEmpty}
         variant="destructive"
       />
-    </div>
+    </>
   )
 }

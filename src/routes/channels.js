@@ -155,8 +155,10 @@ router.get('/ids', (req, res) => {
 router.get('/duplicates', (req, res) => {
   const threshold = parseInt(req.query.threshold || '80', 10);
   const channels = db.prepare(`
-    SELECT c.id, c.name, c.url, c.group_id, c.health_status, c.is_active
+    SELECT c.id, c.name, c.url, c.group_id, c.health_status, c.health_latency_ms, c.is_active,
+           s.name AS source_name
     FROM channels c
+    LEFT JOIN sources s ON c.source_id = s.id
     WHERE c.is_active = 1
   `).all();
 

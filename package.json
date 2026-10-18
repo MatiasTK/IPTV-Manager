@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "setup": "node src/db/seed.js"
+    "setup": "node src/db/seed.js",
+    "app": "bash scripts/run.sh",
+    "app:prod": "bash scripts/run.sh --prod"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

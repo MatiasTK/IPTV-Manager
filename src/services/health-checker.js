@@ -23,6 +23,10 @@ const getActiveChannelsStmt = db.prepare(`
   SELECT id, url, name, health_status, http_user_agent, referrer FROM channels WHERE is_active = 1
 `);
 
+const getSourceChannelsStmt = db.prepare(`
+  SELECT id, url, name, health_status, http_user_agent, referrer FROM channels WHERE is_active = 1 AND source_id = ?
+`);
+
 const updateChannelHealthStmt = db.prepare(`
   UPDATE channels
   SET health_status = ?, health_latency_ms = ?, last_health_check = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
@@ -37,6 +41,10 @@ const insertHealthCheckStmt = db.prepare(`
 const purgeOldChecksStmt = db.prepare(`
   DELETE FROM health_checks
   WHERE checked_at < datetime('now', '-7 days')
+`);
+
+const sourceNameStmt = db.prepare(`
+  SELECT s.name FROM channels c LEFT JOIN sources s ON c.source_id = s.id WHERE c.id = ?
 `);
 
 const getAlternativesStmt = db.prepare(`
@@ -98,6 +106,15 @@ function checkUrl(urlStr, timeoutMs, httpUserAgent = '', referrer = '', method =
       parsedUrl = new URL(safeUrl);
     } catch {
       return resolve({ status: 'down', latencyMs: 0, httpStatus: null, error: 'Invalid URL' });
+    }
+
+    // Solo se puede sondear http/https. Otros esquemas válidos (rtmp, rtsp, udp…) quedan
+    // como 'unknown'; cualquier otra cosa (ej. una línea "EXTINF:" mal parseada) es una URL inválida.
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(urlStr);
+      return resolve(hasScheme
+        ? { status: 'unknown', latencyMs: 0, httpStatus: null, error: `Unsupported protocol ${parsedUrl.protocol}` }
+        : { status: 'down', latencyMs: 0, httpStatus: null, error: 'Invalid URL' });
     }
 
     const isHttps = parsedUrl.protocol === 'https:';
@@ -217,12 +234,19 @@ async function checkChannels(channels, timeoutMs, concurrency) {
   let checkedCount = 0;
 
   async function worker() {
-    while (idx < channels.length) {
+    while (idx < channels.length && !cancelRequested) {
       const ch = channels[idx++];
-      const result = await checkUrlWithRetries(ch.url, timeoutMs, ch.http_user_agent, ch.referrer);
+      let result;
+      try {
+        result = await checkUrlWithRetries(ch.url, timeoutMs, ch.http_user_agent, ch.referrer);
+      } catch (err) {
+        // Un canal con datos raros nunca debe abortar toda la verificación
+        result = { status: 'down', latencyMs: 0, httpStatus: null, error: err.message };
+      }
       results.push({ channel: ch, result });
       
       checkedCount++;
+      progress.checked = checkedCount;
       if (checkedCount % 100 === 0 || checkedCount === channels.length) {
         console.log(`[HealthChecker] Progress: ${checkedCount}/${channels.length} channels checked...`);
       }
@@ -253,6 +277,8 @@ function handleAutoSwitch(channel) {
       fromUrl: channel.url,
       toUrl: bestAlt.url,
       alternativeId: bestAlt.id,
+      fromSource: (sourceNameStmt.get(channel.id) || {}).name || null,
+      toSource: (sourceNameStmt.get(bestAlt.id) || {}).name || null,
       reason: 'primary_down',
     };
 
@@ -264,12 +290,30 @@ function handleAutoSwitch(channel) {
 }
 
 let isChecking = false;
+let cancelRequested = false;
+let currentSourceId = null;
+const progress = { checked: 0, total: 0 };
 
 function isCheckRunning() {
   return isChecking;
 }
 
-async function runHealthCheck(force = false) {
+/** Pide detener la verificación en curso (los canales ya verificados se guardan). */
+function requestCancel() {
+  if (isChecking) cancelRequested = true;
+  return isChecking;
+}
+
+/** Fuente que se está verificando (null = todas). */
+function getCurrentSourceId() {
+  return isChecking ? currentSourceId : null;
+}
+
+function getProgress() {
+  return { checked: progress.checked, total: progress.total };
+}
+
+async function runHealthCheck(force = false, sourceId = null) {
   if (!force) {
     const enabledSetting = db.prepare("SELECT value FROM settings WHERE key = 'health_check_enabled'").get();
     if (enabledSetting && enabledSetting.value === '0') {
@@ -284,12 +328,17 @@ async function runHealthCheck(force = false) {
   }
 
   isChecking = true;
+  currentSourceId = sourceId;
+  cancelRequested = false;
+  progress.checked = 0;
+  progress.total = 0;
   try {
 
-  const channels = getActiveChannelsStmt.all();
+  const channels = sourceId ? getSourceChannelsStmt.all(sourceId) : getActiveChannelsStmt.all();
   if (channels.length === 0) return;
+  progress.total = channels.length;
 
-  console.log(`[HealthChecker] Checking ${channels.length} channels...`);
+  console.log(`[HealthChecker] Checking ${channels.length} channels${sourceId ? ` (source #${sourceId})` : ''}...`);
 
   const results = await checkChannels(
     channels,
@@ -353,6 +402,8 @@ async function runHealthCheck(force = false) {
   console.log(`[HealthChecker] Done. ✅ ${healthy} healthy, ⚠️ ${degraded} degraded, ❌ ${down} down`);
   } finally {
     isChecking = false;
+    cancelRequested = false;
+    currentSourceId = null;
   }
 }
 
@@ -466,28 +517,63 @@ function recalculateSourcePriorities() {
   }
 }
 
+let schedTimer = null;
+let initialTimer = null;
+let nextRunAt = null;
+
+/** Intervalo en ms: setting `health_check_interval_minutes` o, si no existe, el de config/.env. */
+function getIntervalMs() {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'health_check_interval_minutes'").get();
+    const min = row ? parseInt(row.value, 10) : NaN;
+    if (!isNaN(min) && min >= 1) return min * 60 * 1000;
+  } catch { /* usa el default */ }
+  return config.healthCheck.intervalMs;
+}
+
+function scheduleNext() {
+  clearTimeout(schedTimer);
+  const ms = getIntervalMs();
+  nextRunAt = new Date(Date.now() + ms).toISOString();
+  schedTimer = setTimeout(async () => {
+    console.log('[HealthChecker] Running scheduled health check...');
+    try { await runHealthCheck(); } catch (err) { console.error(err); }
+    scheduleNext();
+  }, ms);
+}
+
+/** Reprograma el próximo chequeo (se llama cuando cambia el intervalo en Configuración). */
+function rescheduleHealthChecker() {
+  if (schedTimer) scheduleNext();
+}
+
+function getNextRunAt() {
+  return nextRunAt;
+}
+
 /**
  * Start the background health check job.
  * Returns a stop function.
  */
 function startHealthChecker() {
-  console.log(`[HealthChecker] Starting. Interval: ${config.healthCheck.intervalMs}ms`);
+  console.log(`[HealthChecker] Starting. Interval: ${getIntervalMs()}ms`);
 
   // Run immediately on startup (delayed 10s to let server stabilize)
-  const initialTimeout = setTimeout(() => {
+  initialTimer = setTimeout(() => {
     console.log('[HealthChecker] Running initial startup check...');
     runHealthCheck().catch(console.error);
   }, 10000);
 
-  const interval = setInterval(() => {
-    console.log('[HealthChecker] Running scheduled health check...');
-    runHealthCheck().catch(console.error);
-  }, config.healthCheck.intervalMs);
+  scheduleNext();
 
   return function stop() {
-    clearTimeout(initialTimeout);
-    clearInterval(interval);
+    clearTimeout(initialTimer);
+    clearTimeout(schedTimer);
+    schedTimer = null;
   };
 }
 
-module.exports = { startHealthChecker, runHealthCheck, checkSingleChannel, recalculateSourcePriorities, isCheckRunning, autoSwitchLog };
+module.exports = {
+  startHealthChecker, runHealthCheck, checkSingleChannel, recalculateSourcePriorities,
+  isCheckRunning, autoSwitchLog, requestCancel, getProgress, getCurrentSourceId, getNextRunAt, getIntervalMs, rescheduleHealthChecker,
+};

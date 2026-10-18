@@ -4,6 +4,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
 const { authMiddleware, csrfMiddleware } = require('../middleware/auth');
+const { rescheduleHealthChecker } = require('../services/health-checker');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -19,7 +20,7 @@ router.get('/', (req, res) => {
 
 // ── PUT /api/settings ──────────────────────────────────────────────────────────
 router.put('/', (req, res) => {
-  const allowed = ['playlist_name', 'epg_urls', 'health_check_enabled', 'duplicate_threshold'];
+  const allowed = ['playlist_name', 'epg_urls', 'health_check_enabled', 'health_check_interval_minutes', 'duplicate_threshold'];
   const updates = req.body;
 
   if (typeof updates !== 'object' || Array.isArray(updates)) {
@@ -38,6 +39,11 @@ router.put('/', (req, res) => {
           if (isNaN(n) || n < 0 || n > 100) continue; // skip invalid
           val = String(n);
         }
+        if (key === 'health_check_interval_minutes') {
+          const n = parseInt(val, 10);
+          if (isNaN(n) || n < 1 || n > 1440) continue; // 1 min – 24 h
+          val = String(n);
+        }
         if (key === 'health_check_enabled') val = val === '0' ? '0' : '1';
         upsert.run(key, val);
       }
@@ -45,6 +51,7 @@ router.put('/', (req, res) => {
   });
 
   tx(updates);
+  if ('health_check_interval_minutes' in updates) rescheduleHealthChecker();
 
   const rows = db.prepare('SELECT key, value FROM settings').all();
   const settings = {};

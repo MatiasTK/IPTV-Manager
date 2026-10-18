@@ -1,54 +1,27 @@
 import { cn } from '@/lib/utils'
+import { statusColor, statusLabel } from '@/lib/status'
 import type { HealthStatus } from '@/lib/types'
 
-const statusConfig: Record<HealthStatus, { label: string; className: string; dotClass: string }> = {
-  healthy: {
-    label: 'OK',
-    className: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20',
-    dotClass: 'bg-emerald-400',
-  },
-  degraded: {
-    label: 'Lento',
-    className: 'bg-amber-500/15 text-amber-400 border-amber-500/20',
-    dotClass: 'bg-amber-400',
-  },
-  down: {
-    label: 'Caído',
-    className: 'bg-red-500/15 text-red-400 border-red-500/20',
-    dotClass: 'bg-red-400',
-  },
-  unknown: {
-    label: 'Desconocido',
-    className: 'bg-slate-500/15 text-slate-400 border-slate-500/20',
-    dotClass: 'bg-slate-400',
-  },
-  intermittent: {
-    label: 'Intermitente',
-    className: 'bg-orange-500/15 text-orange-400 border-orange-500/20',
-    dotClass: 'bg-orange-400',
-  },
-}
-
-interface HealthBadgeProps {
+interface StatusLabelProps {
   status: HealthStatus
   className?: string
 }
 
-export function HealthBadge({ status, className }: HealthBadgeProps) {
-  const config = statusConfig[status] ?? statusConfig.unknown
+/** Punto de 8px + texto mono 12px en mayúsculas, ambos del color del estado. */
+export function StatusLabel({ status, className }: StatusLabelProps) {
+  const color = statusColor(status)
   return (
     <span
-      className={cn(
-        'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border',
-        config.className,
-        className
-      )}
+      className={cn('inline-flex items-center gap-2 font-mono text-xs whitespace-nowrap', className)}
+      style={{ color }}
     >
-      <span className={cn('w-1.5 h-1.5 rounded-full', config.dotClass)} />
-      {config.label}
+      <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ background: color }} />
+      {statusLabel(status)}
     </span>
   )
 }
+
+export const HealthBadge = StatusLabel
 
 interface HealthDotProps {
   status: HealthStatus
@@ -57,17 +30,12 @@ interface HealthDotProps {
 }
 
 export function HealthDot({ status, size = 'md', className }: HealthDotProps) {
-  const dotClass: Record<HealthStatus, string> = {
-    healthy: 'bg-emerald-400 shadow-[0_0_6px_1px_rgb(52_211_153_/_0.6)]',
-    degraded: 'bg-amber-400 shadow-[0_0_6px_1px_rgb(251_191_36_/_0.6)]',
-    down: 'bg-red-400 shadow-[0_0_6px_1px_rgb(248_113_113_/_0.6)]',
-    unknown: 'bg-slate-500',
-    intermittent: 'bg-orange-400 shadow-[0_0_6px_1px_rgb(251_146_60_/_0.6)]',
-  }
-  const s = size === 'sm' ? 'w-2 h-2' : 'w-2.5 h-2.5'
   return (
     <span
-      className={cn('inline-block rounded-full flex-shrink-0', s, dotClass[status] ?? dotClass.unknown, className)}
+      role="img"
+      aria-label={statusLabel(status)}
+      className={cn('inline-block shrink-0 rounded-full', size === 'sm' ? 'size-2' : 'size-2.5', className)}
+      style={{ background: statusColor(status) }}
     />
   )
 }

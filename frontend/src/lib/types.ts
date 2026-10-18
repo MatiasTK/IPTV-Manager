@@ -133,6 +133,8 @@ export interface AutoSwitchEntry {
   fromUrl: string
   toUrl: string
   alternativeId: number
+  fromSource: string | null
+  toSource: string | null
   reason: string
 }
 
@@ -140,6 +142,11 @@ export interface HealthStatusResponse {
   summary: HealthSummary
   autoSwitchLog: AutoSwitchEntry[]
   isChecking: boolean
+  progress: { checked: number; total: number }
+  checkingSourceId: number | null
+  lastCheckAt: string | null
+  nextCheckAt: string | null
+  intervalMinutes: number
 }
 
 export interface HealthChannel {
@@ -150,6 +157,7 @@ export interface HealthChannel {
   health_latency_ms: number
   last_health_check: string | null
   group_name: string | null
+  source_id: number | null
   source_name: string | null
   alt_count: number
 }
@@ -159,6 +167,8 @@ export interface DuplicateChannel {
   id: number
   name: string
   health_status: HealthStatus
+  health_latency_ms: number
+  source_name: string | null
 }
 
 export interface DuplicateGroup {
@@ -179,5 +189,6 @@ export interface Settings {
   epg_urls: string
   playlist_name: string
   health_check_enabled: string
+  health_check_interval_minutes?: string
   duplicate_threshold: string
 }
