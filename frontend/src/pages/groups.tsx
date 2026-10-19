@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { FolderOpen, Plus, Pencil, Trash2, ArrowUp, ArrowDown, Loader2 } from 'lucide-react'
 import { PageHeader } from '@/components/shared/page-header'
 import { EmptyState } from '@/components/shared/empty-state'
@@ -6,6 +6,7 @@ import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { FilterChips } from '@/components/shared/filter-chips'
 import { Switch } from '@/components/ui/switch'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -18,10 +19,12 @@ import {
   useGroups, useCreateGroup, useUpdateGroup, useDeleteGroup, useReorderGroups,
   useAutoSuggestGroups, useApplyAutoSuggest, useDeleteEmptyGroups
 } from '@/hooks/use-groups'
-import { useHealthChannels } from '@/hooks/use-health'
+import { useHealthBreakdown } from '@/hooks/use-health'
 import { STATUS_COLOR } from '@/lib/status'
 import type { Group } from '@/lib/types'
 import { toast } from 'sonner'
+
+const PAGE_SIZE = 20
 
 export default function GroupsPage() {
   const { data, isLoading } = useGroups()
@@ -37,27 +40,57 @@ export default function GroupsPage() {
   const [deleteChannels, setDeleteChannels] = useState(false)
   const [deleteEmptyConfirmOpen, setDeleteEmptyConfirmOpen] = useState(false)
   const [name, setName] = useState('')
+  const [search, setSearch] = useState('')
+  const [view, setView] = useState<'all' | 'empty' | 'down'>('all')
+  const [page, setPage] = useState(0)
+  const [posEdit, setPosEdit] = useState<{ id: number; value: string } | null>(null)
 
   // Auto-suggest (panel lateral)
   const { data: suggestData, isLoading: suggestLoading } = useAutoSuggestGroups(true)
   const applySuggest = useApplyAutoSuggest()
-  const { data: healthData } = useHealthChannels()
+  const { data: healthData } = useHealthBreakdown()
 
   const groups = data?.groups ?? []
   const emptyGroupsCount = groups.filter((g) => g.channel_count === 0).length
   const suggestions = suggestData?.suggestions ?? []
   const suggestedChannels = suggestions.reduce((n, x) => n + x.channels.length, 0)
 
-  // Salud por grupo, derivada de /api/health/channels
-  const healthByGroup = new Map<string, { ok: number; deg: number; down: number; total: number }>()
-  for (const ch of healthData?.channels ?? []) {
-    if (!ch.group_name) continue
-    const e = healthByGroup.get(ch.group_name) ?? { ok: 0, deg: 0, down: 0, total: 0 }
-    e.total++
-    if (ch.health_status === 'healthy') e.ok++
-    else if (ch.health_status === 'degraded' || ch.health_status === 'intermittent') e.deg++
-    else if (ch.health_status === 'down') e.down++
-    healthByGroup.set(ch.group_name, e)
+  // Salud por grupo, agregada en el servidor (/api/health/breakdown)
+  const healthByGroup = new Map((healthData?.byGroup ?? []).map((r) => [r.name, r]))
+
+  const filtering = search.trim() !== '' || view !== 'all'
+  const downCount = groups.filter((g) => (healthByGroup.get(g.name)?.down ?? 0) > 0).length
+  // Se conserva la posición real (idx) para que reordenar siga funcionando con la lista filtrada
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return groups
+      .map((group, idx) => ({ group, idx }))
+      .filter(({ group }) => {
+        if (q && !group.name.toLowerCase().includes(q)) return false
+        if (view === 'empty') return group.channel_count === 0
+        if (view === 'down') return (healthByGroup.get(group.name)?.down ?? 0) > 0
+        return true
+      })
+  }, [groups, search, view, healthByGroup])
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE))
+  const currentPage = Math.min(page, pageCount - 1)
+  const pageRows = visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE)
+
+  const handleMoveTo = async (from: number, rawPos: string) => {
+    setPosEdit(null)
+    const parsed = parseInt(rawPos, 10)
+    if (Number.isNaN(parsed)) return
+    const to = Math.min(groups.length, Math.max(1, parsed)) - 1
+    if (to === from) return
+    const next = [...groups]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    try {
+      await reorderGroups.mutateAsync(next.map((g, i) => ({ id: g.id, sort_order: i + 1 })))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al reordenar')
+    }
   }
 
   const handleApply = async (items: typeof suggestions) => {
@@ -165,6 +198,27 @@ export default function GroupsPage() {
 
       <div className="flex flex-wrap items-start gap-[22px]">
         <section aria-label="Lista de grupos" className="min-w-0 flex-[2_1_560px] overflow-hidden rounded-[10px] border border-border bg-card">
+          <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
+            <Input
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(0) }}
+              placeholder="Buscar grupo…"
+              aria-label="Buscar grupo"
+              className="h-9 max-w-[240px]"
+            />
+            <FilterChips
+              label="Filtrar grupos"
+              value={view}
+              onChange={(v) => { setView(v); setPage(0) }}
+              className="gap-1.5 [&_button]:h-9 [&_button]:px-3"
+              options={[
+                { value: 'all', label: 'Todos', count: groups.length },
+                { value: 'empty', label: 'Vacíos', count: emptyGroupsCount },
+                { value: 'down', label: 'Con caídos', count: downCount },
+              ]}
+            />
+          </div>
+          <div>
           <Table className="min-w-[640px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
@@ -196,12 +250,37 @@ export default function GroupsPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                groups.map((group, idx) => {
+                pageRows.map(({ group, idx }) => {
                   const h = healthByGroup.get(group.name)
                   const pct = (n: number) => (h && h.total > 0 ? (n / h.total) * 100 : 0)
                   return (
                     <TableRow key={group.id} className="h-14">
-                      <TableCell className="px-4 font-mono text-xs text-label">{sortedOrderLabel(idx)}</TableCell>
+                      <TableCell className="px-4 font-mono text-xs text-label">
+                        {posEdit?.id === group.id ? (
+                          <input
+                            autoFocus
+                            inputMode="numeric"
+                            aria-label={`Nueva posición de ${group.name}`}
+                            value={posEdit.value}
+                            onChange={(e) => setPosEdit({ id: group.id, value: e.target.value })}
+                            onBlur={() => setPosEdit(null)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleMoveTo(idx, posEdit.value)
+                              if (e.key === 'Escape') setPosEdit(null)
+                            }}
+                            className="h-7 w-12 rounded border border-control bg-background px-1.5 text-foreground outline-none"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            title="Mover a otra posición"
+                            onClick={() => setPosEdit({ id: group.id, value: String(idx + 1) })}
+                            className="rounded px-1 py-0.5 hover:bg-raised hover:text-foreground"
+                          >
+                            {sortedOrderLabel(idx)}
+                          </button>
+                        )}
+                      </TableCell>
                       <TableCell className="font-semibold">{group.name}</TableCell>
                       <TableCell className="text-right font-mono text-[#C9CED4]">
                         {group.channel_count === 0 ? <span className="text-label">vacío</span> : group.channel_count.toLocaleString('es-AR')}
@@ -220,10 +299,10 @@ export default function GroupsPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center justify-end gap-1">
-                          <Button variant="secondary" size="icon-sm" aria-label={`Subir ${group.name}`} disabled={idx === 0 || reorderGroups.isPending} onClick={() => handleReorder(idx, 'up')}>
+                          <Button variant="secondary" size="icon-sm" aria-label={`Subir ${group.name}`} disabled={filtering || idx === 0 || reorderGroups.isPending} onClick={() => handleReorder(idx, 'up')}>
                             <ArrowUp aria-hidden="true" />
                           </Button>
-                          <Button variant="secondary" size="icon-sm" aria-label={`Bajar ${group.name}`} disabled={idx === groups.length - 1 || reorderGroups.isPending} onClick={() => handleReorder(idx, 'down')}>
+                          <Button variant="secondary" size="icon-sm" aria-label={`Bajar ${group.name}`} disabled={filtering || idx === groups.length - 1 || reorderGroups.isPending} onClick={() => handleReorder(idx, 'down')}>
                             <ArrowDown aria-hidden="true" />
                           </Button>
                           <Button variant="secondary" size="icon-sm" aria-label={`Editar ${group.name}`} onClick={() => handleOpenEdit(group)}>
@@ -240,6 +319,26 @@ export default function GroupsPage() {
               )}
             </TableBody>
           </Table>
+          {!isLoading && groups.length > 0 && visible.length === 0 && (
+            <p className="px-4 py-10 text-center text-sm text-muted-foreground">Ningún grupo coincide con el filtro.</p>
+          )}
+          </div>
+          {visible.length > PAGE_SIZE && (
+            <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-2.5">
+              <span className="font-mono text-[11px] text-label">
+                {currentPage * PAGE_SIZE + 1}–{Math.min(visible.length, (currentPage + 1) * PAGE_SIZE)} de {visible.length.toLocaleString('es-AR')}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" size="sm" onClick={() => setPage(currentPage - 1)} disabled={currentPage === 0}>
+                  Anterior
+                </Button>
+                <span className="min-w-14 text-center font-mono text-xs text-muted-foreground">{currentPage + 1} / {pageCount}</span>
+                <Button variant="secondary" size="sm" onClick={() => setPage(currentPage + 1)} disabled={currentPage >= pageCount - 1}>
+                  Siguiente
+                </Button>
+              </div>
+            </div>
+          )}
         </section>
 
         <aside aria-label="Sugerencias de agrupamiento" className="flex min-w-0 flex-[1_1_300px] flex-col gap-3.5 rounded-[10px] border border-border bg-card p-[18px]">
@@ -255,6 +354,7 @@ export default function GroupsPage() {
             </span>
           </div>
           {suggestLoading && <Loader2 aria-label="Cargando" className="mx-auto size-5 animate-spin text-label" />}
+          <div className="flex max-h-[calc(100vh-460px)] min-h-[160px] flex-col gap-3.5 overflow-y-auto">
           {suggestions.map((x) => (
             <div key={x.groupName} className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -267,6 +367,7 @@ export default function GroupsPage() {
               </Button>
             </div>
           ))}
+          </div>
           {suggestions.length > 0 && (
             <Button onClick={() => handleApply(suggestions)} disabled={applySuggest.isPending}>
               {applySuggest.isPending && <Loader2 aria-hidden="true" className="animate-spin" />}

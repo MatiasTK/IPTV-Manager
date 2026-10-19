@@ -24,8 +24,9 @@ function buildIdsUrl(filters: Omit<ChannelFilters, 'limit' | 'page' | 'sortBy' |
   return `/api/channels/ids?${params}`
 }
 
-export function useChannels(filters: ChannelFilters = {}) {
+export function useChannels(filters: ChannelFilters = {}, opts: { enabled?: boolean } = {}) {
   return useQuery({
+    enabled: opts.enabled ?? true,
     queryKey: ['channels', filters],
     queryFn: () => api.get<{ channels: Channel[]; total: number; page: number; limit: number }>(buildChannelsUrl(filters)),
     staleTime: 30_000,
@@ -164,7 +165,8 @@ export function useBulkEditChannelsGroup() {
 export function useDeleteDownChannels() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: () => api.post<{ ok: boolean; deletedCount: number }>('/api/channels/delete-down'),
+    mutationFn: (source: string = 'all') =>
+      api.post<{ ok: boolean; deletedCount: number }>('/api/channels/delete-down', { source }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['channels'] })
       qc.invalidateQueries({ queryKey: ['health'] })

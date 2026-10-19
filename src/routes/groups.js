@@ -3,6 +3,7 @@
 const express = require('express');
 const db = require('../db/database');
 const { authMiddleware, csrfMiddleware } = require('../middleware/auth');
+const { schedulePublish } = require('../services/gist-publisher');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -10,6 +11,21 @@ router.use(csrfMiddleware);
 
 // ── GET /api/groups ────────────────────────────────────────────────────────────
 router.get('/', (req, res) => {
+  const sourceId = Number(req.query.sourceId) || null;
+
+  // With sourceId the counts only cover that list, and groups it doesn't use are left out
+  if (sourceId) {
+    const groups = db.prepare(`
+      SELECT g.*, COUNT(c.id) AS channel_count
+      FROM groups g
+      JOIN channels c ON c.group_id = g.id AND c.source_id = ?
+      GROUP BY g.id
+      ORDER BY g.sort_order, g.name
+    `).all(sourceId);
+    const ungrouped = db.prepare('SELECT COUNT(*) AS n FROM channels WHERE group_id IS NULL AND source_id = ?').get(sourceId).n;
+    return res.json({ groups, ungrouped });
+  }
+
   const groups = db.prepare(`
     SELECT g.*, COUNT(c.id) AS channel_count
     FROM groups g
@@ -17,7 +33,8 @@ router.get('/', (req, res) => {
     GROUP BY g.id
     ORDER BY g.sort_order, g.name
   `).all();
-  res.json({ groups });
+  const ungrouped = db.prepare('SELECT COUNT(*) AS n FROM channels WHERE group_id IS NULL').get().n;
+  res.json({ groups, ungrouped });
 });
 
 // ── POST /api/groups ───────────────────────────────────────────────────────────
@@ -64,6 +81,69 @@ router.post('/delete-empty', (req, res) => {
     )
   `).run();
   res.json({ ok: true, deletedCount: result.changes });
+});
+
+// ── POST /api/groups/bulk-delete ───────────────────────────────────────────────
+// Body: { ids: number[], noGroup?: boolean, sourceId?: number, exclude?: boolean }
+// With sourceId only that list's channels are removed; otherwise the groups' channels go from every list.
+// A group left with no channels is deleted. With exclude, the group names are added to the
+// blacklist of every affected source so a later sync doesn't bring them back.
+router.post('/bulk-delete', (req, res) => {
+  const { noGroup = false, exclude = false } = req.body;
+  const ids = [...new Set((Array.isArray(req.body.ids) ? req.body.ids : []).map(Number).filter(Number.isInteger))];
+  const sourceId = Number(req.body.sourceId) || null;
+  if (ids.length === 0 && !noGroup) return res.status(400).json({ error: 'ids required.' });
+  if (ids.length > 5000) return res.status(400).json({ error: 'Too many groups.' });
+
+  const result = db.transaction(() => {
+    const ph = ids.map(() => '?').join(',');
+    const names = ids.length
+      ? db.prepare(`SELECT id, name FROM groups WHERE id IN (${ph})`).all(...ids)
+      : [];
+
+    const scope = ids.length ? `group_id IN (${ph})` : 'group_id IS NULL';
+    const scopeParams = ids.length ? [...ids] : [];
+    const withNoGroup = ids.length && noGroup ? ` OR group_id IS NULL` : '';
+    const where = `(${scope}${withNoGroup})${sourceId ? ' AND source_id = ?' : ''}`;
+    const params = sourceId ? [...scopeParams, sourceId] : scopeParams;
+
+    const affectedSources = db.prepare(`SELECT DISTINCT source_id FROM channels WHERE ${where} AND source_id IS NOT NULL`)
+      .all(...params).map((r) => r.source_id);
+
+    const deletedChannels = db.prepare(`DELETE FROM channels WHERE ${where}`).run(...params).changes;
+
+    // Groups of this selection that no channel uses any more
+    let deletedGroups = 0;
+    if (ids.length) {
+      deletedGroups = db.prepare(`
+        DELETE FROM groups WHERE id IN (${ph})
+          AND id NOT IN (SELECT DISTINCT group_id FROM channels WHERE group_id IS NOT NULL)
+      `).run(...ids).changes;
+    }
+
+    // Sources only learn about the exclusion for groups that have a name (not "Sin grupo")
+    if (exclude && names.length) {
+      const read = db.prepare('SELECT excluded_groups FROM sources WHERE id = ?');
+      const write = db.prepare('UPDATE sources SET excluded_groups = ? WHERE id = ?');
+      const targets = sourceId ? [sourceId] : affectedSources;
+      for (const sid of targets) {
+        const row = read.get(sid);
+        if (!row) continue;
+        let current = [];
+        try { current = JSON.parse(row.excluded_groups || '[]'); } catch { /* reset */ }
+        write.run(JSON.stringify([...new Set([...current, ...names.map((g) => g.name)])]), sid);
+      }
+    }
+
+    // sources.channel_count is a stored figure; keep it in step with what is left
+    const recount = db.prepare('UPDATE sources SET channel_count = (SELECT COUNT(*) FROM channels WHERE source_id = sources.id) WHERE id = ?');
+    for (const sid of affectedSources) recount.run(sid);
+
+    return { deletedChannels, deletedGroups };
+  })();
+
+  schedulePublish();
+  res.json({ ok: true, ...result });
 });
 
 // ── DELETE /api/groups/:id ─────────────────────────────────────────────────────

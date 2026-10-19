@@ -1,3 +1,4 @@
+import { lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from '@/components/ui/sonner'
@@ -5,14 +6,25 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { AuthContext, useAuthProvider, useAuth } from '@/hooks/use-auth'
 import { AppLayout } from '@/components/layout/app-layout'
 import LoginPage from '@/pages/login'
-import ChannelsPage from '@/pages/channels'
-import GroupsPage from '@/pages/groups'
-import SourcesPage from '@/pages/sources'
-import HealthPage from '@/pages/health'
-import DuplicatesPage from '@/pages/duplicates'
-import RawEditorPage from '@/pages/raw-editor'
-import SettingsPage from '@/pages/settings'
-import CheckerPage from '@/pages/checker'
+
+const ChannelsPage = lazy(() => import('@/pages/channels'))
+const GroupsPage = lazy(() => import('@/pages/groups'))
+const SourcesPage = lazy(() => import('@/pages/sources'))
+const HealthPage = lazy(() => import('@/pages/health'))
+const DuplicatesPage = lazy(() => import('@/pages/duplicates'))
+const PublishPage = lazy(() => import('@/pages/publish'))
+const RawEditorPage = lazy(() => import('@/pages/raw-editor'))
+const SettingsPage = lazy(() => import('@/pages/settings'))
+const CheckerPage = lazy(() => import('@/pages/checker'))
+
+// Fetch the other pages' chunks once the browser is idle so sidebar clicks never wait on the network
+const pageLoaders = [
+  () => import('@/pages/channels'), () => import('@/pages/groups'), () => import('@/pages/sources'),
+  () => import('@/pages/health'), () => import('@/pages/duplicates'), () => import('@/pages/publish'),
+  () => import('@/pages/raw-editor'), () => import('@/pages/settings'), () => import('@/pages/checker'),
+]
+const whenIdle = (fn: () => void) => ('requestIdleCallback' in window ? window.requestIdleCallback(fn) : setTimeout(fn, 1500))
+whenIdle(() => pageLoaders.forEach((load) => { load() }))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -55,6 +67,7 @@ function AppRoutes() {
         <Route path="/sources" element={<SourcesPage />} />
         <Route path="/health" element={<HealthPage />} />
         <Route path="/duplicates" element={<DuplicatesPage />} />
+        <Route path="/publish" element={<PublishPage />} />
         <Route path="/raw-editor" element={<RawEditorPage />} />
         <Route path="/checker" element={<CheckerPage />} />
         <Route path="/settings" element={<SettingsPage />} />

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, memo, startTransition } from 'react'
 import {
   Radio, Plus, Search, Pencil, Trash2, Link, Activity, Loader2, RotateCcw, ArrowUp, ArrowDown, ArrowUpDown, ChevronsLeft, ChevronsRight,
 } from 'lucide-react'
@@ -11,15 +11,13 @@ import { EmptyState } from '@/components/shared/empty-state'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { ChannelFormDialog } from '@/components/channels/channel-form-dialog'
 import { AlternativesDialog } from '@/components/channels/alternatives-dialog'
+import { BrowseNav } from '@/components/channels/browse-nav'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -28,6 +26,7 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
+import { LazySelect } from '@/components/shared/lazy-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MoreHorizontal } from 'lucide-react'
 import {
@@ -42,6 +41,12 @@ import type { Channel, ChannelFilters, HealthStatus } from '@/lib/types'
 import { toast } from 'sonner'
 
 const PAGE_SIZE = 100
+
+type View = 'browse' | 'table'
+const VIEW_KEY = 'channels-view'
+const readView = (): View => {
+  try { return localStorage.getItem(VIEW_KEY) === 'table' ? 'table' : 'browse' } catch { return 'browse' }
+}
 
 // ── Simple debounce hook ────────────────────────────────────────────────────
 function useDebounce<T>(value: T, delayMs: number): T {
@@ -83,6 +88,142 @@ function SortHead({ field, label, sortBy, sortOrder, onSort }: {
   )
 }
 
+interface RowActions {
+  select: (id: number, checked: boolean | 'indeterminate') => void
+  toggle: (c: Channel) => void
+  edit: (c: Channel) => void
+  alternatives: (c: Channel) => void
+  check: (c: Channel) => void
+  remove: (c: Channel) => void
+  brokenLogo: (id: number) => void
+}
+
+// Radix menus are costly to mount ×100: a plain button stands in until the pointer
+// gets close (or it is clicked/focused), and only then is the real menu created.
+function RowMenu({ channel, actions }: { channel: Channel; actions: RowActions }) {
+  const [mode, setMode] = useState<'idle' | 'ready' | 'open'>('idle')
+  if (mode === 'idle') {
+    return (
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={`Acciones de ${channel.name}`}
+        onPointerEnter={() => setMode('ready')}
+        onFocus={() => setMode('ready')}
+        onClick={() => setMode('open')}
+      >
+        <MoreHorizontal aria-hidden="true" />
+      </Button>
+    )
+  }
+  return (
+    <DropdownMenu defaultOpen={mode === 'open'}>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label={`Acciones de ${channel.name}`}>
+          <MoreHorizontal aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => actions.edit(channel)}>
+          <Pencil className="mr-2 size-4" />Editar
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => actions.alternatives(channel)}>
+          <Link className="mr-2 size-4" />Alternativas
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => actions.check(channel)}>
+          <Activity className="mr-2 size-4" />Verificar
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => actions.remove(channel)}>
+          <Trash2 className="mr-2 size-4" />Eliminar
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+// Memoized: selecting one row or opening a dialog must not re-render the other 99
+const ChannelRow = memo(function ChannelRow({ channel, selected, broken, actions, showGroup, showSource, asColumns }: {
+  channel: Channel
+  selected: boolean
+  broken: boolean
+  actions: RowActions
+  showGroup: boolean
+  showSource: boolean
+  /** true = Grupo/Fuente get their own columns (Tabla); false = they go under the name (Explorar) */
+  asColumns: boolean
+}) {
+  const status = channel.health_status as HealthStatus
+  return (
+        <TableRow
+                data-state={selected ? 'selected' : undefined}
+          className={cn(selected && 'bg-[#17191D]', channel.is_active === 0 && 'opacity-50')}
+        >
+          <TableCell>
+            <Checkbox
+              aria-label={`Seleccionar ${channel.name}`}
+              checked={selected}
+              onCheckedChange={(c) => actions.select(channel.id, c)}
+            />
+          </TableCell>
+          <TableCell>
+            <div className="flex items-center gap-3">
+              {!channel.tvg_logo || broken ? (
+                <div className="flex size-[34px] shrink-0 items-center justify-center rounded-md bg-muted font-mono text-[11px] text-[#C9CED4]">
+                  {channel.name.slice(0, 3).toUpperCase()}
+                </div>
+              ) : (
+                <img
+                  src={`/api/channels/logo-proxy?url=${encodeURIComponent(channel.tvg_logo)}`}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  className="size-[34px] shrink-0 rounded-md bg-muted object-contain"
+                  onError={() => actions.brokenLogo(channel.id)}
+                />
+              )}
+              <div className="flex min-w-0 flex-col">
+                <span className="font-semibold break-words">{channel.name}</span>
+                {asColumns ? (
+                  channel.tvg_id && <span className="font-mono text-[11px] text-[#7C838C]">{channel.tvg_id}</span>
+                ) : (
+                  <span className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-[#7C838C]">
+                    {showGroup && <span className="text-[#C9CED4]">{channel.group_name ?? 'Sin grupo'}</span>}
+                    {showGroup && showSource && <span aria-hidden="true">·</span>}
+                    {showSource && <span>{channel.source_name ?? 'Manual'}</span>}
+                    {(showGroup || showSource) && channel.tvg_id && <span aria-hidden="true">·</span>}
+                    {channel.tvg_id && <span className="font-mono">{channel.tvg_id}</span>}
+                  </span>
+                )}
+              </div>
+            </div>
+          </TableCell>
+          {asColumns && showGroup && <TableCell className="text-[#C9CED4]">{channel.group_name ?? '—'}</TableCell>}
+          {asColumns && showSource && (
+            <TableCell className="max-w-[180px] truncate text-muted-foreground" title={channel.source_name ?? undefined}>
+              {channel.source_name ?? <span className="italic">Manual</span>}
+            </TableCell>
+          )}
+          <TableCell><StatusLabel status={status} /></TableCell>
+          <TableCell><LatencyBar status={status} ms={channel.health_latency_ms} /></TableCell>
+          <TableCell className="text-right font-mono text-muted-foreground">
+            {channel.alt_count > 0 ? `+${channel.alt_count}` : '—'}
+          </TableCell>
+          <TableCell>
+            <Switch
+              aria-label={`${channel.is_active === 1 ? 'Desactivar' : 'Activar'} ${channel.name}`}
+              checked={channel.is_active === 1}
+              onCheckedChange={() => actions.toggle(channel)}
+            />
+          </TableCell>
+          <TableCell>
+            <RowMenu channel={channel} actions={actions} />
+          </TableCell>
+        </TableRow>
+  )
+})
+
 export default function ChannelsPage() {
   // ── Filter state (raw input, debounced for server) ──────────────────────
   const [searchInput, setSearchInput] = useState('')
@@ -92,6 +233,12 @@ export default function ChannelsPage() {
   const [sortBy, setSortBy] = useState<ChannelFilters['sortBy']>(undefined)
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
+  const [view, setViewState] = useState<View>(readView)
+  const setView = (v: View) => {
+    setViewState(v)
+    try { localStorage.setItem(VIEW_KEY, v) } catch { /* storage unavailable */ }
+  }
+  const browse = view === 'browse'
 
   const debouncedSearch = useDebounce(searchInput, 300)
 
@@ -140,6 +287,16 @@ export default function ChannelsPage() {
   const { data: groupsData } = useGroups()
   const { data: sourcesData } = useSources()
   const { data: healthData } = useHealthStatus()
+
+  const groupOptions = useMemo(() => [
+    { value: 'all', label: 'Todos los grupos' },
+    ...(groupsData?.groups ?? []).map((g) => ({ value: String(g.id), label: g.name })),
+    { value: 'none', label: 'Sin grupo' },
+  ], [groupsData])
+  const sourceOptions = useMemo(() => [
+    { value: 'all', label: 'Todas las fuentes' },
+    ...(sourcesData?.sources ?? []).map((x) => ({ value: String(x.id), label: x.name })),
+  ], [sourcesData])
 
   const channels = channelsData?.channels ?? []
   const total = channelsData?.total ?? 0
@@ -256,6 +413,31 @@ export default function ChannelsPage() {
     }
   }
 
+  // Stable handlers for the memoized rows (they always call the latest closures)
+  const actionsRef = useRef<RowActions>(null as unknown as RowActions)
+  actionsRef.current = {
+    select: handleRowCheckbox,
+    toggle: handleToggle,
+    edit: (c) => { setEditChannel(c); setFormOpen(true) },
+    alternatives: setAltChannel,
+    check: handleCheck,
+    remove: setDeleteTarget,
+    brokenLogo: (id) => setBrokenLogos((prev) => ({ ...prev, [id]: true })),
+  }
+  const rowActions = useMemo<RowActions>(() => ({
+    select: (id, c) => actionsRef.current.select(id, c),
+    toggle: (c) => actionsRef.current.toggle(c),
+    edit: (c) => actionsRef.current.edit(c),
+    alternatives: (c) => actionsRef.current.alternatives(c),
+    check: (c) => actionsRef.current.check(c),
+    remove: (c) => actionsRef.current.remove(c),
+    brokenLogo: (id) => actionsRef.current.brokenLogo(id),
+  }), [])
+
+  // Paint the page shell first; the 100 rows render as a non-urgent update so navigating here feels instant
+  const [rowsReady, setRowsReady] = useState(false)
+  useEffect(() => { startTransition(() => setRowsReady(true)) }, [])
+
   const hasActiveFilters = !!(debouncedSearch || groupFilter !== 'all' || sourceFilter !== 'all' || healthFilter !== 'all')
 
   const searchRef = useRef<HTMLInputElement>(null)
@@ -309,6 +491,11 @@ export default function ChannelsPage() {
     ? 'Sin resultados'
     : `${((page - 1) * PAGE_SIZE + 1).toLocaleString('es-AR')}–${Math.min(page * PAGE_SIZE, total).toLocaleString('es-AR')} de ${total.toLocaleString('es-AR')}`
 
+  // In Explorar the group/source columns are redundant once that level is picked in the navigator
+  const showGroup = !browse || groupFilter === 'all'
+  const showSource = !browse || sourceFilter === 'all'
+  const colCount = 7 + (!browse && showGroup ? 1 : 0) + (!browse && showSource ? 1 : 0)
+
   const bulkBtn = 'h-9 rounded-[7px] px-3 text-[13px]'
 
   return (
@@ -330,13 +517,21 @@ export default function ChannelsPage() {
         }
       />
 
-      <StatStrip
-        items={stats}
-        className="grid-cols-[repeat(auto-fit,minmax(180px,1fr))]"
-      />
+      {!browse && (
+        <StatStrip
+          items={stats}
+          className="grid-cols-[repeat(auto-fit,minmax(180px,1fr))]"
+        />
+      )}
 
       {/* Filtros */}
       <div className="flex flex-wrap items-center gap-2.5">
+        <FilterChips
+          label="Vista"
+          value={view}
+          onChange={setView}
+          options={[{ value: 'browse', label: 'Explorar' }, { value: 'table', label: 'Tabla' }]}
+        />
         <label className="flex h-11 min-w-[240px] flex-[1_1_280px] items-center gap-2.5 rounded-lg border border-control bg-card px-3.5 hover:border-control-strong focus-within:border-control-strong">
           <Search aria-hidden="true" className="size-4 shrink-0 text-label" />
           <span className="sr-only">Buscar canales</span>
@@ -349,25 +544,36 @@ export default function ChannelsPage() {
           />
           <kbd className="rounded border border-control px-1.5 py-0.5 font-mono text-[11px] text-label">/</kbd>
         </label>
-        <Select value={groupFilter} onValueChange={setGroupFilter}>
-          <SelectTrigger aria-label="Grupo" className="w-44"><SelectValue placeholder="Todos los grupos" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todos los grupos</SelectItem>
-            {groupsData?.groups.map((g) => (
-              <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
-            ))}
-            <SelectItem value="none">Sin grupo</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={sourceFilter} onValueChange={setSourceFilter}>
-          <SelectTrigger aria-label="Fuente" className="w-44"><SelectValue placeholder="Todas las fuentes" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todas las fuentes</SelectItem>
-            {sourcesData?.sources.map((s) => (
-              <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {browse && (
+          <LazySelect
+            value={healthFilter}
+            onValueChange={setHealthFilter}
+            ariaLabel="Estado"
+            className="w-48"
+            placeholder="Todos los estados"
+            options={healthChips.map((c) => ({ value: c.value, label: c.count === undefined ? c.label : `${c.label} · ${c.count.toLocaleString('es-AR')}` }))}
+          />
+        )}
+        {!browse && (
+          <>
+            <LazySelect
+              value={groupFilter}
+              onValueChange={setGroupFilter}
+              ariaLabel="Grupo"
+              className="w-44"
+              placeholder="Todos los grupos"
+              options={groupOptions}
+            />
+            <LazySelect
+              value={sourceFilter}
+              onValueChange={setSourceFilter}
+              ariaLabel="Fuente"
+              className="w-44"
+              placeholder="Todas las fuentes"
+              options={sourceOptions}
+            />
+          </>
+        )}
         {(sortBy || hasActiveFilters) && (
           <Button
             variant="secondary"
@@ -385,8 +591,18 @@ export default function ChannelsPage() {
           </Button>
         )}
       </div>
-      <FilterChips label="Estado" options={healthChips} value={healthFilter} onChange={setHealthFilter} />
+      {!browse && <FilterChips label="Estado" options={healthChips} value={healthFilter} onChange={setHealthFilter} />}
 
+      <div className={cn(browse && 'grid grid-cols-1 gap-3 lg:h-[calc(100dvh-215px)] lg:min-h-[460px] lg:grid-cols-[220px_250px_minmax(0,1fr)]')}>
+      {browse && (
+        <BrowseNav
+          sourceFilter={sourceFilter}
+          groupFilter={groupFilter}
+          onSource={(v) => { setSourceFilter(v); setGroupFilter('all') }}
+          onGroup={setGroupFilter}
+        />
+      )}
+      <div className={cn('flex min-w-0 w-full flex-1 flex-col gap-4', browse && 'min-h-0 gap-3')}>
       {/* Barra de selección */}
       {selectedIds.size > 0 && (
         <div className="overflow-hidden rounded-[10px] border border-control bg-raised text-[13px]">
@@ -435,10 +651,13 @@ export default function ChannelsPage() {
       )}
 
       {/* Tabla */}
-      <div className="overflow-hidden rounded-[10px] border border-border bg-card">
+      <div className={cn(
+        'overflow-hidden rounded-[10px] border border-border bg-card',
+        browse && 'flex min-h-[320px] flex-1 flex-col lg:min-h-0 [&_[data-slot=table-container]]:min-h-0 [&_[data-slot=table-container]]:flex-1 [&_[data-slot=table-container]]:overflow-y-auto'
+      )}>
         {isFetching && !isLoading && <div className="h-0.5 animate-pulse bg-active" />}
-        <Table className="min-w-[900px]">
-          <TableHeader>
+        <Table className={browse ? 'min-w-[560px]' : 'min-w-[900px]'}>
+          <TableHeader className="sticky top-0 z-10">
             <TableRow className="hover:bg-transparent">
               <TableHead className="w-12">
                 <Checkbox
@@ -448,8 +667,8 @@ export default function ChannelsPage() {
                 />
               </TableHead>
               <SortHead field="name" label="Canal" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
-              <SortHead field="group" label="Grupo" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
-              <SortHead field="source" label="Fuente" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
+              {!browse && showGroup && <SortHead field="group" label="Grupo" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />}
+              {!browse && showSource && <SortHead field="source" label="Fuente" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />}
               <SortHead field="status" label="Estado" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
               <SortHead field="latency" label="Latencia" sortBy={sortBy ?? ''} sortOrder={sortOrder} onSort={handleSort} />
               <TableHead className="w-16 text-right">Alt.</TableHead>
@@ -458,17 +677,17 @@ export default function ChannelsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? (
+            {isLoading || !rowsReady ? (
               Array.from({ length: 8 }).map((_, i) => (
                 <TableRow key={i}>
-                  {Array.from({ length: 9 }).map((_, j) => (
+                  {Array.from({ length: colCount }).map((_, j) => (
                     <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                   ))}
                 </TableRow>
               ))
             ) : channels.length === 0 ? (
               <TableRow className="hover:bg-transparent">
-                <TableCell colSpan={9}>
+                <TableCell colSpan={colCount}>
                   <EmptyState
                     icon={Radio}
                     title="No hay canales"
@@ -477,86 +696,18 @@ export default function ChannelsPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              channels.map((channel) => {
-                const status = channel.health_status as HealthStatus
-                const selected = selectedIds.has(channel.id)
-                return (
-                  <TableRow
-                    key={channel.id}
-                    data-state={selected ? 'selected' : undefined}
-                    className={cn(selected && 'bg-[#17191D]', channel.is_active === 0 && 'opacity-50')}
-                  >
-                    <TableCell>
-                      <Checkbox
-                        aria-label={`Seleccionar ${channel.name}`}
-                        checked={selected}
-                        onCheckedChange={(c) => handleRowCheckbox(channel.id, c)}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        {!channel.tvg_logo || brokenLogos[channel.id] ? (
-                          <div className="flex size-[34px] shrink-0 items-center justify-center rounded-md bg-muted font-mono text-[11px] text-[#C9CED4]">
-                            {channel.name.slice(0, 3).toUpperCase()}
-                          </div>
-                        ) : (
-                          <img
-                            src={`/api/channels/logo-proxy?url=${encodeURIComponent(channel.tvg_logo)}`}
-                            alt=""
-                            referrerPolicy="no-referrer"
-                            className="size-[34px] shrink-0 rounded-md bg-muted object-contain"
-                            onError={() => setBrokenLogos((prev) => ({ ...prev, [channel.id]: true }))}
-                          />
-                        )}
-                        <div className="flex min-w-0 flex-col">
-                          <span className="font-semibold">{channel.name}</span>
-                          {channel.tvg_id && <span className="font-mono text-[11px] text-[#7C838C]">{channel.tvg_id}</span>}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-[#C9CED4]">{channel.group_name ?? '—'}</TableCell>
-                    <TableCell className="max-w-[180px] truncate text-muted-foreground" title={channel.source_name ?? undefined}>
-                      {channel.source_name ?? <span className="italic">Manual</span>}
-                    </TableCell>
-                    <TableCell><StatusLabel status={status} /></TableCell>
-                    <TableCell><LatencyBar status={status} ms={channel.health_latency_ms} /></TableCell>
-                    <TableCell className="text-right font-mono text-muted-foreground">
-                      {channel.alt_count > 0 ? `+${channel.alt_count}` : '—'}
-                    </TableCell>
-                    <TableCell>
-                      <Switch
-                        aria-label={`${channel.is_active === 1 ? 'Desactivar' : 'Activar'} ${channel.name}`}
-                        checked={channel.is_active === 1}
-                        onCheckedChange={() => handleToggle(channel)}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon-sm" aria-label={`Acciones de ${channel.name}`}>
-                            <MoreHorizontal aria-hidden="true" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => { setEditChannel(channel); setFormOpen(true) }}>
-                            <Pencil className="mr-2 size-4" />Editar
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setAltChannel(channel)}>
-                            <Link className="mr-2 size-4" />Alternativas
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleCheck(channel)}>
-                            <Activity className="mr-2 size-4" />Verificar
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeleteTarget(channel)}>
-                            <Trash2 className="mr-2 size-4" />Eliminar
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                )
-              })
+              channels.map((channel) => (
+                <ChannelRow
+                  key={channel.id}
+                  channel={channel}
+                  selected={selectedIds.has(channel.id)}
+                  broken={!!brokenLogos[channel.id]}
+                  actions={rowActions}
+                  showGroup={showGroup}
+                  showSource={showSource}
+                  asColumns={!browse}
+                />
+              ))
             )}
           </TableBody>
         </Table>
@@ -575,6 +726,9 @@ export default function ChannelsPage() {
             <ChevronsRight aria-hidden="true" />
           </Button>
         </div>
+      </div>
+
+      </div>
       </div>
 
       {/* Modals */}
@@ -605,15 +759,12 @@ export default function ChannelsPage() {
             </p>
             <div className="space-y-1.5">
               <Label>Grupo</Label>
-              <Select value={bulkGroupId} onValueChange={setBulkGroupId}>
-                <SelectTrigger><SelectValue placeholder="Sin grupo" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Sin grupo</SelectItem>
-                  {groupsData?.groups.map((g) => (
-                    <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <LazySelect
+                value={bulkGroupId}
+                onValueChange={setBulkGroupId}
+                placeholder="Sin grupo"
+                options={[{ value: 'none', label: 'Sin grupo' }, ...groupOptions.filter((o) => o.value !== 'all' && o.value !== 'none')]}
+              />
             </div>
           </div>
           <DialogFooter>

@@ -7,10 +7,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select'
 import { useCreateChannel, useUpdateChannel } from '@/hooks/use-channels'
+import { LazySelect } from '@/components/shared/lazy-select'
 import { useGroups } from '@/hooks/use-groups'
 import type { Channel } from '@/lib/types'
 import { toast } from 'sonner'
@@ -163,17 +161,14 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
             {/* Group */}
             <div className="space-y-1.5">
               <Label id="ch-group-label">Grupo</Label>
-              <Select value={groupIdValue || 'none'} onValueChange={(v) => setValue('groupId', v === 'none' ? '' : v)}>
-                <SelectTrigger className="w-full" aria-label="Grupo">
-                  <SelectValue placeholder="Sin grupo" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Sin grupo</SelectItem>
-                  {groupsData?.groups.map((g) => (
-                    <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <LazySelect
+                value={groupIdValue || 'none'}
+                onValueChange={(v) => setValue('groupId', v === 'none' ? '' : v)}
+                ariaLabel="Grupo"
+                className="w-full"
+                placeholder="Sin grupo"
+                options={[{ value: 'none', label: 'Sin grupo' }, ...(groupsData?.groups ?? []).map((g) => ({ value: String(g.id), label: g.name }))]}
+              />
             </div>
 
             {/* Catchup type */}

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router'
-import { Radio, FolderOpen, Link, Copy, FileCode, Activity, Settings, LogOut, Tv, Menu, ShieldCheck } from 'lucide-react'
+import { Radio, FolderOpen, Link, Copy, FileCode, Activity, Settings, LogOut, Tv, Menu, ShieldCheck, Send } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/use-auth'
 import { useHealthStatus, useDuplicates } from '@/hooks/use-health'
@@ -25,10 +25,9 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { data: groups } = useGroups()
   const { data: sources } = useSources()
   const { data: settings } = useSettings()
-  // Caro de calcular en el servidor: se cachea 10 min y recién corre cuando se conoce el umbral
-  const { data: dups } = useDuplicates(Number(settings?.duplicate_threshold) || 80, {
+  // Caro de calcular en el servidor: el servidor lo cachea y recién corre cuando se conoce el umbral
+  const { data: dups } = useDuplicates(Number(settings?.duplicate_threshold) || 80, 'all', {
     enabled: !!settings,
-    staleTime: 10 * 60 * 1000,
   })
 
   const fmt = (n: number | undefined) => (n === undefined ? undefined : n.toLocaleString('es-AR'))
@@ -48,9 +47,10 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     {
       label: 'Herramientas',
       items: [
-        { to: '/duplicates', icon: Copy, label: 'Duplicados', count: fmt(dups?.count) },
+        { to: '/duplicates', icon: Copy, label: 'Duplicados', count: fmt(dups?.pages[0]?.count) },
         { to: '/raw-editor', icon: FileCode, label: 'Editor Raw' },
         { to: '/checker', icon: ShieldCheck, label: 'IPTV Checker' },
+        { to: '/publish', icon: Send, label: 'Publicación' },
       ],
     },
     {

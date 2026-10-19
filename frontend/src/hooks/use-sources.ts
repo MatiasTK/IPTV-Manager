@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Source, SourcePreviewResponse, ImportResult } from '@/lib/types'
+import type { Source, SourceVerification, SourcePreviewResponse, ImportResult } from '@/lib/types'
 
 export function useSources() {
   return useQuery({
@@ -69,6 +69,7 @@ export function useImportUrl() {
       name: string
       url: string
       selectedUrls?: string[]
+      excludedGroups?: string[]
       autoSync?: number
       syncIntervalHours?: number
       priority?: number
@@ -84,8 +85,8 @@ export function useImportUrl() {
 export function useImportText() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ text, sourceName, selectedUrls }: { text: string; sourceName?: string; selectedUrls?: string[] }) =>
-      api.post<ImportResult>('/api/sources/import-text', { text, sourceName, selectedUrls }),
+    mutationFn: ({ text, sourceName, selectedUrls, excludedGroups }: { text: string; sourceName?: string; selectedUrls?: string[]; excludedGroups?: string[] }) =>
+      api.post<ImportResult>('/api/sources/import-text', { text, sourceName, selectedUrls, excludedGroups }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sources'] })
       qc.invalidateQueries({ queryKey: ['channels'] })
@@ -102,6 +103,7 @@ export function useImportXtream() {
       xtreamUser: string
       xtreamPass: string
       selectedUrls?: string[]
+      excludedGroups?: string[]
       autoSync?: number
       syncIntervalHours?: number
       priority?: number
@@ -111,5 +113,14 @@ export function useImportXtream() {
       qc.invalidateQueries({ queryKey: ['sources'] })
       qc.invalidateQueries({ queryKey: ['channels'] })
     },
+  })
+}
+
+/** Checks the source's own connection/account (not its channels). */
+export function useVerifySource() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.post<SourceVerification>(`/api/sources/${id}/verify`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sources'] }),
   })
 }

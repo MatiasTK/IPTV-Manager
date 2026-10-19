@@ -13,13 +13,19 @@ if (!fs.existsSync(config.dataDir)) {
 const db = new Database(config.dbPath);
 
 // Register custom SQL function to extract clean base name for grouping/sorting
+// Sorting calls this once per row on every request; names repeat a lot, so memoize.
+const baseNameCache = new Map();
 db.function('get_base_name', (name) => {
   if (!name) return '';
+  const cached = baseNameCache.get(name);
+  if (cached !== undefined) return cached;
   let base = name.toLowerCase();
   base = base.replace(/\s*\(.*?\)/g, ''); // Remove parentheses like (Opción 1)
   base = base.replace(/\b(hd|sd|fhd|4k)\b/g, ''); // Remove resolution tags
   base = base.replace(/\d+/g, ''); // Remove numbers to group Fox Sports 2, etc.
   base = base.trim().replace(/\s+/g, ' '); // Clean spaces
+  if (baseNameCache.size > 200_000) baseNameCache.clear();
+  baseNameCache.set(name, base);
   return base;
 });
 
@@ -150,8 +156,54 @@ function initSchema() {
     db.exec("ALTER TABLE sources ADD COLUMN xtream_pass TEXT DEFAULT ''");
   }
 
+  if (!info.some((col) => col.name === 'xtream_info')) {
+    db.exec("ALTER TABLE sources ADD COLUMN xtream_info TEXT DEFAULT ''");
+  }
+
+  // Last "verify source" result (JSON): connection/account status shown on the source card
+  if (!info.some((col) => col.name === 'verify_info')) {
+    db.exec("ALTER TABLE sources ADD COLUMN verify_info TEXT DEFAULT ''");
+  }
+
+  // EPG URLs declared by the source itself (M3U x-tvg-url / Xtream server_info.epg_url), newline-separated
+  if (!info.some((col) => col.name === 'epg_urls')) {
+    db.exec("ALTER TABLE sources ADD COLUMN epg_urls TEXT DEFAULT ''");
+  }
+
+  // Groups the user chose not to import from this source (JSON array of names); sync skips them
+  if (!info.some((col) => col.name === 'excluded_groups')) {
+    db.exec("ALTER TABLE sources ADD COLUMN excluded_groups TEXT DEFAULT '[]'");
+  }
+
+  // Publishing: fixed M3U slots published to a secret gist (see docs/tivimate-slots-plan.md)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS publish_slots (
+      slot INTEGER PRIMARY KEY,
+      source_id INTEGER,
+      assigned_at DATETIME,
+      content_hash TEXT,
+      published_at DATETIME,
+      channel_count INTEGER DEFAULT 0,
+      dead_excluded INTEGER DEFAULT 0,
+      last_error TEXT,
+      FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE SET NULL
+    );
+    CREATE TABLE IF NOT EXISTS publish_slot_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slot INTEGER NOT NULL,
+      source_id INTEGER,
+      source_name TEXT,
+      assigned_at DATETIME,
+      released_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   // Seed default settings if not present
   const defaults = [
+    ['publish_gist_id', ''],
+    ['publish_slot_count', '10'],
+    ['publish_auto', '0'],
+    ['publish_dead_warn_pct', '30'],
     ['playlist_token', generateToken()],
     ['playlist_name', 'My IPTV Playlist'],
     ['epg_urls', ''],
@@ -165,6 +217,10 @@ function initSchema() {
   for (const [key, value] of defaults) {
     insertSetting.run(key, value);
   }
+
+  const slotCount = parseInt(db.prepare("SELECT value FROM settings WHERE key = 'publish_slot_count'").get().value, 10) || 10;
+  const insertSlot = db.prepare('INSERT OR IGNORE INTO publish_slots (slot) VALUES (?)');
+  for (let n = 1; n <= slotCount; n++) insertSlot.run(n);
 }
 
 function generateToken() {

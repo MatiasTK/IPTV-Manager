@@ -416,7 +416,7 @@ function toPrefill(result: CheckResult): ImportPrefill {
   return { type: 'url', name, url: result.url }
 }
 
-function ResultCard({ result }: { result: CheckResult }) {
+function ResultCard({ result, rechecking, onRecheck }: { result: CheckResult; rechecking: boolean; onRecheck: () => void }) {
   const navigate = useNavigate()
   const [infoExpanded, setInfoExpanded]       = useState(false)
   const [channelsData, setChannelsData]       = useState<ChannelsData | null>(null)
@@ -617,6 +617,10 @@ function ResultCard({ result }: { result: CheckResult }) {
           <Button variant="secondary" size="icon" onClick={handleCopyUrl} aria-label="Copiar URL">
             <Copy aria-hidden="true" />
           </Button>
+          <Button variant="secondary" onClick={onRecheck} disabled={rechecking || checkingInProgress}>
+            {rechecking ? <Loader2 aria-hidden="true" className="animate-spin" /> : <RefreshCw aria-hidden="true" />}
+            {rechecking ? 'Verificando...' : 'Verificar'}
+          </Button>
           {si && (
             <Button
               variant="secondary"
@@ -705,6 +709,7 @@ export default function CheckerPage() {
   const [results, setResults]     = useState<CheckResult[]>([])
   const [loading, setLoading]     = useState(false)
   const [recents, setRecents]     = useState<RecentCheck[]>(loadRecents)
+  const [recheckingUrl, setRecheckingUrl] = useState<string | null>(null)
 
   const urls = useMemo(() => {
     if (mode === 'xtream') {
@@ -751,6 +756,22 @@ export default function CheckerPage() {
       toast.error(err?.message || 'Error al verificar las URLs')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleRecheck = async (url: string) => {
+    setRecheckingUrl(url)
+    try {
+      const data = await api.post<{ results: CheckResult[] }>('/api/checker/check', { urls: [url] })
+      const fresh = data.results[0]
+      if (fresh) {
+        setResults(prev => prev.map(r => (r.url === url ? fresh : r)))
+        toast.success(fresh.status === 'online' ? 'Servidor online' : 'Servidor offline')
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Error al verificar el servidor')
+    } finally {
+      setRecheckingUrl(null)
     }
   }
 
@@ -885,7 +906,12 @@ export default function CheckerPage() {
       {!loading && results.length > 0 && mode !== 'extract' && (
         <div className="flex flex-col gap-[22px]">
           {results.map((result, i) => (
-            <ResultCard key={result.url + i} result={result} />
+            <ResultCard
+              key={result.url + i}
+              result={result}
+              rechecking={recheckingUrl === result.url}
+              onRecheck={() => handleRecheck(result.url)}
+            />
           ))}
         </div>
       )}

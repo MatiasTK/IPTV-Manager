@@ -2,11 +2,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { Group } from '@/lib/types'
 
-export function useGroups() {
+/** With sourceId, counts and groups are scoped to that list. */
+export function useGroups(sourceId?: number) {
   return useQuery({
-    queryKey: ['groups'],
-    queryFn: () => api.get<{ groups: Group[] }>('/api/groups'),
+    queryKey: ['groups', sourceId ?? 'all'],
+    queryFn: () => api.get<{ groups: Group[]; ungrouped: number }>(sourceId ? `/api/groups?sourceId=${sourceId}` : '/api/groups'),
     staleTime: 60_000,
+    placeholderData: (prev) => prev,
   })
 }
 
@@ -35,6 +37,20 @@ export function useDeleteGroup() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['groups'] })
       qc.invalidateQueries({ queryKey: ['channels'] })
+    },
+  })
+}
+
+export function useBulkDeleteGroups() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { ids: number[]; noGroup?: boolean; sourceId?: number; exclude?: boolean }) =>
+      api.post<{ ok: boolean; deletedChannels: number; deletedGroups: number }>('/api/groups/bulk-delete', data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['groups'] })
+      qc.invalidateQueries({ queryKey: ['channels'] })
+      qc.invalidateQueries({ queryKey: ['sources'] })
+      qc.invalidateQueries({ queryKey: ['health'] })
     },
   })
 }

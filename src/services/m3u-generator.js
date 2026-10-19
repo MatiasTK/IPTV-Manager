@@ -105,7 +105,13 @@ function generateM3U() {
   // ── Channels ─────────────────────────────────────────────────────────────────
   const channels = getPrimaryChannelsStmt.all();
 
+  // The same URL can now exist in several sources (each is published on its own);
+  // the global playlist keeps only the first (best-priority) one.
+  const seenUrls = new Set();
+
   for (const ch of channels) {
+    if (seenUrls.has(ch.url)) continue;
+    seenUrls.add(ch.url);
     const alternatives = getAlternativesStmt.all(ch.id);
 
     // Build the ordered stream list (primary first, then alternatives)

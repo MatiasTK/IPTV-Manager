@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/table'
 import {
   ChevronLeft, ChevronRight,
-  Loader2, CheckSquare, Square, AlertTriangle, Copy,
+  Loader2, CheckSquare, Square, AlertTriangle, Copy, Search,
 } from 'lucide-react'
 import type { SourcePreviewResponse, PreviewChannel } from '@/lib/types'
 
@@ -24,7 +24,7 @@ interface Props {
   sourceName: string
   preview: SourcePreviewResponse
   isSubmitting: boolean
-  onConfirm: (selectedUrls: string[]) => void
+  onConfirm: (selectedUrls: string[], excludedGroups: string[]) => void
 }
 
 const PAGE_SIZE = 100
@@ -48,9 +48,28 @@ export function ImportPreviewDialog({
     )
   )
 
+  // Groups unchecked in the side list: their channels are not imported and the source remembers to skip them on sync
+  const [excluded, setExcluded] = useState<Set<string>>(() => new Set())
+  const [groupQuery, setGroupQuery] = useState('')
+
   const [groupFilter, setGroupFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [brokenLogos, setBrokenLogos] = useState<Record<string, boolean>>({})
+
+  const channelsByGroup = useMemo(() => {
+    const m = new Map<string, PreviewChannel[]>()
+    for (const c of preview.channels) {
+      if (!c.groupTitle) continue
+      const list = m.get(c.groupTitle)
+      if (list) list.push(c); else m.set(c.groupTitle, [c])
+    }
+    return m
+  }, [preview.channels])
+
+  const shownGroups = useMemo(() => {
+    const needle = groupQuery.trim().toLowerCase()
+    return needle ? preview.groups.filter((g) => g.toLowerCase().includes(needle)) : preview.groups
+  }, [preview.groups, groupQuery])
 
   // Filtered list (client-side, all channels already in memory)
   const filtered: PreviewChannel[] = useMemo(() =>
@@ -75,19 +94,49 @@ export function ImportPreviewDialog({
 
   // ── Selection ops (all O(1) or O(filtered)) ──────────────────────────────
 
-  const toggle = useCallback((url: string) => {
+  const toggle = useCallback((url: string, groupTitle?: string) => {
     setSelectedSet((prev) => {
       const next = new Set(prev)
-      if (next.has(url)) next.delete(url)
-      else next.add(url)
+      if (next.has(url)) {
+        next.delete(url)
+      } else {
+        next.add(url)
+        // Picking a channel of an excluded group brings that group back, or the server would skip it
+        if (groupTitle) setExcluded((ex) => { if (!ex.has(groupTitle)) return ex; const e = new Set(ex); e.delete(groupTitle); return e })
+      }
       return next
     })
   }, [])
+
+  /** Include/exclude whole groups: keeps the channel selection and the exclusion list in step. */
+  const setGroupsIncluded = useCallback((groups: string[], included: boolean) => {
+    setExcluded((prev) => {
+      const next = new Set(prev)
+      groups.forEach((g) => { if (included) next.delete(g); else next.add(g) })
+      return next
+    })
+    setSelectedSet((prev) => {
+      const next = new Set(prev)
+      for (const g of groups) {
+        for (const c of channelsByGroup.get(g) ?? []) {
+          if (!included) next.delete(c.url)
+          else if (!c.isDuplicate && !c.isInternalDuplicate) next.add(c.url)
+        }
+      }
+      return next
+    })
+  }, [channelsByGroup])
 
   const selectVisible = useCallback(() => {
     setSelectedSet((prev) => {
       const next = new Set(prev)
       filtered.forEach((c) => next.add(c.url))
+      return next
+    })
+    setExcluded((prev) => {
+      if (prev.size === 0) return prev
+      const next = new Set(prev)
+      filtered.forEach((c) => next.delete(c.groupTitle))
       return next
     })
   }, [filtered])
@@ -107,6 +156,12 @@ export function ImportPreviewDialog({
         visible.forEach((c) => next.add(c.url))
         return next
       })
+      setExcluded((prev) => {
+        if (prev.size === 0) return prev
+        const next = new Set(prev)
+        visible.forEach((c) => next.delete(c.groupTitle))
+        return next
+      })
     } else {
       setSelectedSet((prev) => {
         const next = new Set(prev)
@@ -122,7 +177,7 @@ export function ImportPreviewDialog({
   }
 
   const handleConfirm = () => {
-    onConfirm([...selectedSet])
+    onConfirm([...selectedSet], [...excluded])
   }
 
   // ── Stats bar ─────────────────────────────────────────────────────────────
@@ -182,7 +237,7 @@ export function ImportPreviewDialog({
         {/* Controls */}
         <div className="flex flex-wrap items-center gap-3 border-b border-border px-6 py-3">
           <Select value={groupFilter} onValueChange={handleGroupChange}>
-            <SelectTrigger aria-label="Grupo" className="w-64 max-w-full">
+            <SelectTrigger aria-label="Grupo" className="w-64 max-w-full md:hidden">
               <SelectValue placeholder="Todos los grupos" />
             </SelectTrigger>
             <SelectContent>
@@ -190,7 +245,7 @@ export function ImportPreviewDialog({
                 Todos los grupos ({preview.total.toLocaleString()})
               </SelectItem>
               {preview.groups.map((g) => {
-                const count = preview.channels.filter((c) => c.groupTitle === g).length
+                const count = channelsByGroup.get(g)?.length ?? 0
                 return (
                   <SelectItem key={g} value={g}>
                     {g} ({count.toLocaleString()})
@@ -218,6 +273,55 @@ export function ImportPreviewDialog({
           </div>
         </div>
 
+        <div className="flex min-h-0 flex-1">
+        {/* Groups: checkbox = import it (unchecked groups are skipped now and on every sync), name = filter the table */}
+        <aside aria-label="Grupos de la lista" className="hidden w-72 shrink-0 flex-col border-r border-border md:flex">
+          <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+            <span className="font-mono text-[11px] tracking-wider text-label uppercase">
+              Grupos · {(preview.groups.length - excluded.size).toLocaleString('es-AR')}/{preview.groups.length.toLocaleString('es-AR')}
+            </span>
+            <div className="flex gap-1">
+              <Button variant="ghost" size="sm" onClick={() => setGroupsIncluded(shownGroups, true)}>Todos</Button>
+              <Button variant="ghost" size="sm" onClick={() => setGroupsIncluded(shownGroups, false)}>Ninguno</Button>
+            </div>
+          </div>
+          <label className="flex items-center gap-2 border-b border-border px-4 py-2">
+            <Search aria-hidden="true" className="size-3.5 shrink-0 text-label" />
+            <span className="sr-only">Buscar grupos</span>
+            <input
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none"
+              placeholder="Buscar grupo…"
+              value={groupQuery}
+              onChange={(e) => setGroupQuery(e.target.value)}
+            />
+          </label>
+          <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
+            {shownGroups.map((g) => {
+              const included = !excluded.has(g)
+              return (
+                <li key={g} className={`flex items-center gap-2 rounded-md px-2 ${groupFilter === g ? 'bg-active' : 'hover:bg-raised'}`}>
+                  <Checkbox
+                    aria-label={`Importar el grupo ${g}`}
+                    checked={included}
+                    onCheckedChange={(c) => setGroupsIncluded([g], c === true)}
+                  />
+                  <button
+                    type="button"
+                    aria-pressed={groupFilter === g}
+                    onClick={() => handleGroupChange(groupFilter === g ? 'all' : g)}
+                    className={`flex min-h-9 min-w-0 flex-1 items-center justify-between gap-2 text-left text-[13px] ${included ? 'text-foreground' : 'text-label line-through'}`}
+                  >
+                    <span className="truncate">{g}</span>
+                    <span className="font-mono text-xs text-label">{(channelsByGroup.get(g)?.length ?? 0).toLocaleString('es-AR')}</span>
+                  </button>
+                </li>
+              )
+            })}
+            {shownGroups.length === 0 && <li className="px-2 py-3 text-[13px] text-label">Sin resultados</li>}
+          </ul>
+        </aside>
+
+        <div className="flex min-w-0 flex-1 flex-col">
         {/* Table — scrollable */}
         <div className="flex-1 overflow-auto min-h-0">
           <Table>
@@ -245,13 +349,13 @@ export function ImportPreviewDialog({
                   <TableRow
                     key={`${ch.url}-${i}`}
                     className={`cursor-pointer select-none ${isDup ? 'opacity-60' : ''}`}
-                    onClick={() => toggle(ch.url)}
+                    onClick={() => toggle(ch.url, ch.groupTitle)}
                   >
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         aria-label={`Seleccionar ${ch.name}`}
                         checked={isSelected}
-                        onCheckedChange={() => toggle(ch.url)}
+                        onCheckedChange={() => toggle(ch.url, ch.groupTitle)}
                       />
                     </TableCell>
                     <TableCell>
@@ -324,8 +428,16 @@ export function ImportPreviewDialog({
           </div>
         </div>
 
+        </div>
+        </div>
+
         {/* Footer */}
         <DialogFooter className="border-t border-border px-6 py-4">
+          {excluded.size > 0 && (
+            <span className="mr-auto self-center text-xs text-muted-foreground">
+              {excluded.size.toLocaleString('es-AR')} {excluded.size === 1 ? 'grupo excluido' : 'grupos excluidos'}: no se importan ni se sincronizan.
+            </span>
+          )}
           <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             Cancelar
           </Button>

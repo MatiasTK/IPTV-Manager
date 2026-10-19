@@ -2,10 +2,24 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { Loader2 } from 'lucide-react'
 import { PageHeader } from '@/components/shared/page-header'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
 import { toast } from 'sonner'
 
+interface RawSource {
+  id: number
+  name: string
+  type: string
+  channelCount: number
+}
+
 export default function RawEditorPage() {
+  const [sources, setSources] = useState<RawSource[]>([])
+  const [orphans, setOrphans] = useState(0)
+  const [scope, setScope] = useState<string | null>(null)
+  // Unsaved edits per tab, so switching tabs never loses work
+  const draftsRef = useRef<Record<string, { content: string; original: string }>>({})
+
   const [content, setContent] = useState('')
   const [isDirty, setIsDirty] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -14,10 +28,22 @@ export default function RawEditorPage() {
   const gutterRef = useRef<HTMLDivElement>(null)
   const [justSaved, setJustSaved] = useState(false)
 
-  const loadContent = async () => {
+  const loadContent = async (target: string | null = scope, force = true) => {
+    if (target === null) return
+    const draft = draftsRef.current[target]
+    if (draft && !force) {
+      setContent(draft.content)
+      originalRef.current = draft.original
+      setIsDirty(draft.content !== draft.original)
+      setJustSaved(false)
+      setIsLoading(false)
+      return
+    }
     setIsLoading(true)
     try {
-      const text = await api.get<string>('/api/raw/preview', { rawText: true })
+      const text = await api.get<string>(`/api/raw/preview?source=${target}`, { rawText: true })
+      if (target !== scopeRef.current) return
+      draftsRef.current[target] = { content: text, original: text }
       setContent(text)
       originalRef.current = text
       setIsDirty(false)
@@ -25,16 +51,43 @@ export default function RawEditorPage() {
     } catch {
       toast.error('Error al cargar el M3U')
     } finally {
-      setIsLoading(false)
+      if (target === scopeRef.current) setIsLoading(false)
     }
   }
 
+  const scopeRef = useRef<string | null>(null)
+  scopeRef.current = scope
+
   useEffect(() => {
-    loadContent()
+    api
+      .get<{ sources: RawSource[]; orphans: number }>('/api/raw/sources')
+      .then((res) => {
+        setSources(res.sources)
+        setOrphans(res.orphans)
+        const first = res.sources.find((s) => s.channelCount > 0) ?? res.sources[0]
+        setScope(first ? String(first.id) : res.orphans > 0 ? 'none' : null)
+        if (!first && res.orphans === 0) setIsLoading(false)
+      })
+      .catch(() => {
+        toast.error('Error al cargar las fuentes')
+        setIsLoading(false)
+      })
   }, [])
+
+  useEffect(() => {
+    if (scope !== null) loadContent(scope, false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope])
+
+  const switchScope = (next: string) => {
+    if (scope !== null) draftsRef.current[scope] = { content, original: originalRef.current }
+    scopeRef.current = next
+    setScope(next)
+  }
 
   const handleChange = (value: string) => {
     setContent(value)
+    if (scope !== null) draftsRef.current[scope] = { content: value, original: originalRef.current }
     setJustSaved(false)
     setIsDirty(value !== originalRef.current)
   }
@@ -50,9 +103,15 @@ export default function RawEditorPage() {
     }
     setIsSaving(true)
     try {
-      const res = await api.put<{ ok: boolean; activeChannels: number }>('/api/raw/apply', { text: content })
-      toast.success(`Cambios aplicados. ${res.activeChannels} canales activos.`)
+      const res = await api.put<{ ok: boolean; activeChannels: number; sourceChannels: number }>(
+        `/api/raw/apply?source=${scope}`,
+        { text: content }
+      )
+      toast.success(`Cambios aplicados. ${res.sourceChannels} canales en esta fuente, ${res.activeChannels} activos en total.`)
       originalRef.current = content
+      if (scope !== null) draftsRef.current[scope] = { content, original: content }
+      if (scope === 'none') setOrphans(res.sourceChannels)
+      else setSources((prev) => prev.map((s) => (String(s.id) === scope ? { ...s, channelCount: res.sourceChannels } : s)))
       setIsDirty(false)
       setJustSaved(true)
     } catch (err) {
@@ -62,12 +121,37 @@ export default function RawEditorPage() {
     }
   }
 
+  const activeName = scope === 'none' ? 'sin-fuente' : sources.find((s) => String(s.id) === scope)?.name
+  const [query, setQuery] = useState('')
+  const visibleSources = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return q ? sources.filter((s) => s.name.toLowerCase().includes(q)) : sources
+  }, [sources, query])
+  const dirtyTabs = (id: string) => (id === scope ? isDirty : (draftsRef.current[id]?.content ?? '') !== (draftsRef.current[id]?.original ?? ''))
+
+
+  const sourceRow = (id: string, name: string, count: number) => (
+    <button
+      key={id}
+      type="button"
+      onClick={() => switchScope(id)}
+      aria-current={id === scope ? 'true' : undefined}
+      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:text-foreground ${
+        id === scope ? 'bg-active text-foreground' : 'text-muted-foreground'
+      }`}
+    >
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      {dirtyTabs(id) && <span aria-label="sin guardar" className="size-1.5 shrink-0 rounded-full bg-[#F2A33A]" />}
+      <span className="shrink-0 font-mono text-[11px] text-label">{count.toLocaleString('es-AR')}</span>
+    </button>
+  )
+
   const handleDownload = () => {
     const blob = new Blob([content], { type: 'audio/mpegurl;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'playlist.m3u'
+    a.download = `${(activeName || 'playlist').replace(/[^\w.-]+/g, '_')}.m3u`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -147,7 +231,7 @@ export default function RawEditorPage() {
             <Button variant="secondary" onClick={handleDownload} disabled={isLoading}>
               Descargar .m3u
             </Button>
-            <Button variant="secondary" onClick={loadContent} disabled={isLoading}>
+            <Button variant="secondary" onClick={() => loadContent()} disabled={isLoading || scope === null}>
               {isLoading && <Loader2 aria-hidden="true" className="animate-spin" />}
               Recargar
             </Button>
@@ -161,13 +245,13 @@ export default function RawEditorPage() {
 
       <p className="rounded-[10px] border border-border bg-card px-4 py-3 text-[13px] text-muted-foreground">
         <span className="mr-2 font-mono text-degraded">AVISO</span>
-        Los cambios en este editor modifican la base de datos directamente: los canales nuevos se crean, los editados se actualizan y los eliminados se desactivan.
+        Cada pestaña edita una sola fuente: los canales nuevos se crean en ella, los editados se actualizan y los eliminados se desactivan. Las demás fuentes no se tocan.
       </p>
 
       <div className="flex flex-wrap items-start gap-[22px]">
         <section aria-label="Editor" className="flex min-w-0 flex-[3_1_560px] flex-col overflow-hidden rounded-[10px] border border-border bg-[#0B0D0F]">
           <div className="flex items-center justify-between border-b border-border bg-card px-3.5 py-2.5 font-mono text-xs text-muted-foreground">
-            <span>playlist.m3u</span>
+            <span>{activeName ?? 'playlist'}.m3u</span>
             <span>UTF-8 · LF · {lineCount.toLocaleString('es-AR')} líneas</span>
           </div>
           {isLoading ? (
@@ -206,6 +290,22 @@ export default function RawEditorPage() {
         </section>
 
         <aside aria-label="Resumen" className="flex min-w-0 flex-[1_1_260px] flex-col gap-3.5">
+          <div className="flex flex-col gap-2.5 rounded-[10px] border border-border bg-card p-4">
+            <h2 className="text-[15px] font-bold">Fuentes <span className="font-mono text-xs font-normal text-label">{sources.length}</span></h2>
+            {sources.length > 6 && (
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Filtrar fuentes…"
+                aria-label="Filtrar fuentes"
+              />
+            )}
+            <div className="flex max-h-[300px] flex-col gap-0.5 overflow-y-auto">
+              {visibleSources.map((s) => sourceRow(String(s.id), s.name, s.channelCount))}
+              {orphans > 0 && !query && sourceRow('none', 'Sin fuente', orphans)}
+              {visibleSources.length === 0 && <span className="px-2.5 py-1.5 text-[13px] text-label">Sin resultados</span>}
+            </div>
+          </div>
           <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-card p-4">
             <h2 className="text-[15px] font-bold">Validación</h2>
             {checks.map((c, i) => (

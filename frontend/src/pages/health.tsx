@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Activity, Search, Loader2, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/shared/page-header'
@@ -8,6 +8,7 @@ import { LatencyBar } from '@/components/shared/latency-bar'
 import { EmptyState } from '@/components/shared/empty-state'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -52,19 +53,38 @@ const playNotificationSound = () => {
 
 export default function HealthPage() {
   const qc = useQueryClient()
-  const { data: statusData, isLoading: statusLoading } = useHealthStatus()
-  const { data: channelsData, isLoading: channelsLoading } = useHealthChannels()
+  const [source, setSource] = useState('all')
+  const [filter, setFilter] = useState<'all' | HealthStatus>('all')
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [sourceQuery, setSourceQuery] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  const { data: statusData, isLoading: statusLoading } = useHealthStatus(source)
+  const {
+    data: channelsData, isLoading: channelsLoading, isFetching: channelsFetching,
+    hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useHealthChannels(source, filter, debouncedSearch)
   const checkNow = useCheckNow()
   const cancelCheck = useCancelCheck()
   const checkSingle = useCheckChannelHealth()
   const deleteDown = useDeleteDownChannels()
   const [checkingId, setCheckingId] = useState<number | null>(null)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  const [filter, setFilter] = useState<'all' | HealthStatus>('all')
 
   const summary = statusData?.summary
   const switchLog = statusData?.autoSwitchLog ?? []
-  const channels = channelsData?.channels ?? []
+  const rows = useMemo(() => channelsData?.pages.flatMap((p) => p.channels) ?? [], [channelsData])
+  const totalRows = channelsData?.pages[0]?.total ?? 0
+  const sourceList = statusData?.sources ?? []
+  const visibleSources = useMemo(() => {
+    const q = sourceQuery.trim().toLowerCase()
+    return q ? sourceList.filter((x) => x.name.toLowerCase().includes(q)) : sourceList
+  }, [sourceList, sourceQuery])
+  const sourceName = source === 'all' ? null : sourceList.find((x) => String(x.id) === source)?.name ?? null
 
   const isChecking = statusData?.isChecking ?? false
   const [prevChecking, setPrevChecking] = useState(false)
@@ -84,7 +104,7 @@ export default function HealthPage() {
   const handleCheckNow = async () => {
     try {
       toast.loading('Iniciando verificación...', { id: 'health-check' })
-      await checkNow.mutateAsync()
+      await checkNow.mutateAsync(source !== 'all' && source !== 'none' ? Number(source) : undefined)
     } catch {
       toast.error('Error al iniciar la verificación', { id: 'health-check' })
     }
@@ -104,7 +124,7 @@ export default function HealthPage() {
 
   const handleDeleteDown = async () => {
     try {
-      const res = await deleteDown.mutateAsync()
+      const res = await deleteDown.mutateAsync(source)
       toast.success(`Se eliminaron ${res.deletedCount} canales caídos`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error al eliminar canales')
@@ -146,14 +166,6 @@ export default function HealthPage() {
     intermittent: 'Intermitentes', down: 'Caídos', unknown: 'Sin verificar',
   }
 
-  // Peor primero: caídos, y luego por latencia descendente
-  const rows = channels
-    .filter((c) => filter === 'all' || c.health_status === filter)
-    .sort((x, y) => {
-      if ((x.health_status === 'down') !== (y.health_status === 'down')) return x.health_status === 'down' ? -1 : 1
-      return (y.health_latency_ms ?? 0) - (x.health_latency_ms ?? 0)
-    })
-
   return (
     <>
       <PageHeader
@@ -176,7 +188,7 @@ export default function HealthPage() {
             ) : (
               <Button onClick={handleCheckNow} disabled={checkNow.isPending}>
                 {checkNow.isPending && <Loader2 aria-hidden="true" className="animate-spin" />}
-                Verificar ahora
+                {sourceName ? 'Verificar esta fuente' : 'Verificar ahora'}
               </Button>
             )}
           </>
@@ -207,9 +219,16 @@ export default function HealthPage() {
         {/* Canales */}
         <section aria-label="Canales" className="min-w-0 flex-[2_1_560px] overflow-hidden rounded-[10px] border border-border bg-card">
           <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
-            <h2 className="text-[15px] font-bold">{titles[filter]} · {rows.length.toLocaleString('es-AR')}</h2>
-            <span className="font-mono text-xs text-label">peor primero</span>
+            <h2 className="text-[15px] font-bold">{titles[filter]}{sourceName ? ` · ${sourceName}` : ''} · {totalRows.toLocaleString('es-AR')}</h2>
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar canal…"
+              aria-label="Buscar canal"
+              className="h-8 max-w-[220px]"
+            />
           </div>
+          <div className="max-h-[calc(100vh-430px)] min-h-[360px] overflow-y-auto">
           <Table className="min-w-[700px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
@@ -223,7 +242,7 @@ export default function HealthPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {channelsLoading ? (
+              {channelsLoading || (channelsFetching && rows.length === 0) ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>
                     {Array.from({ length: 7 }).map((_, j) => (
@@ -275,10 +294,50 @@ export default function HealthPage() {
               )}
             </TableBody>
           </Table>
+          {hasNextPage && (
+            <div className="flex flex-col items-center gap-2 p-3">
+              <span className="font-mono text-[11px] text-label">
+                {rows.length.toLocaleString('es-AR')} de {totalRows.toLocaleString('es-AR')}
+              </span>
+              <Button variant="secondary" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+                {isFetchingNextPage && <Loader2 aria-hidden="true" className="animate-spin" />}
+                Cargar más
+              </Button>
+            </div>
+          )}
+          </div>
+        </section>
+
+        <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-3.5">
+        <section aria-label="Fuentes" className="flex flex-col gap-2.5 rounded-[10px] border border-border bg-card p-4">
+          <h2 className="text-[15px] font-bold">Fuentes <span className="font-mono text-xs font-normal text-label">{sourceList.length}</span></h2>
+          {sourceList.length > 6 && (
+            <Input value={sourceQuery} onChange={(e) => setSourceQuery(e.target.value)} placeholder="Filtrar fuentes…" aria-label="Filtrar fuentes" />
+          )}
+          <div className="flex max-h-[300px] flex-col gap-0.5 overflow-y-auto">
+            {[
+              ...(sourceQuery ? [] : [{ id: 'all', name: 'Todas las fuentes', total: undefined as number | undefined, down: 0 }]),
+              ...visibleSources.map((x) => ({ id: String(x.id), name: x.name, total: x.total, down: x.down })),
+            ].map((x) => (
+              <button
+                key={x.id}
+                type="button"
+                onClick={() => setSource(x.id)}
+                aria-current={x.id === source ? 'true' : undefined}
+                className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:text-foreground ${
+                  x.id === source ? 'bg-active text-foreground' : 'text-muted-foreground'
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate">{x.name}</span>
+                {x.down > 0 && <span className="shrink-0 font-mono text-[11px]" style={{ color: STATUS_COLOR.down }}>{x.down.toLocaleString('es-AR')}↓</span>}
+                {x.total !== undefined && <span className="shrink-0 font-mono text-[11px] text-label">{x.total.toLocaleString('es-AR')}</span>}
+              </button>
+            ))}
+          </div>
         </section>
 
         {/* Log de switches */}
-        <aside aria-label="Log de switches" className="min-w-0 flex-[1_1_300px] rounded-[10px] border border-border bg-card">
+        <aside aria-label="Log de switches" className="min-w-0 rounded-[10px] border border-border bg-card">
           <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
             <h2 className="text-[15px] font-bold">Log de switches</h2>
             <span className="font-mono text-xs text-label">recientes</span>
@@ -304,13 +363,14 @@ export default function HealthPage() {
             </ol>
           )}
         </aside>
+        </div>
       </div>
 
       <ConfirmDialog
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}
         title="Remover canales caídos"
-        description={`¿Estás seguro de que deseas eliminar permanentemente los ${summary?.down || 0} canales que se encuentran caídos? Esta acción no se puede deshacer.`}
+        description={`¿Estás seguro de que deseas eliminar permanentemente los ${summary?.down || 0} canales caídos${sourceName ? ` de "${sourceName}"` : ''}? Esta acción no se puede deshacer.`}
         confirmLabel="Eliminar canales"
         onConfirm={handleDeleteDown}
         variant="destructive"

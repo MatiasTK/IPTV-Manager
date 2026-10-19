@@ -1,12 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2, Plus, Trash2, Crown } from 'lucide-react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select'
+import { Input } from '@/components/ui/input'
 import { StatusLabel } from '@/components/shared/health-badge'
 import { LatencyBar } from '@/components/shared/latency-bar'
 import { EmptyState } from '@/components/shared/empty-state'
@@ -24,8 +22,23 @@ interface AlternativesDialogProps {
 
 export function AlternativesDialog({ open, onOpenChange, channel }: AlternativesDialogProps) {
   const [selectedAlt, setSelectedAlt] = useState<string>('')
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const { data: channelData, isLoading } = useChannel(open && channel ? channel.id : null)
-  const { data: allChannels } = useChannels({ limit: 500 })
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300)
+    return () => clearTimeout(t)
+  }, [search])
+  useEffect(() => {
+    if (!open) { setSearch(''); setSelectedAlt('') }
+  }, [open])
+
+  // Candidates are searched on the server (75k channels): nothing is fetched until the dialog is open and a term is typed
+  const { data: allChannels, isFetching: searching } = useChannels(
+    { search: debouncedSearch, limit: 20 },
+    { enabled: open && debouncedSearch.length >= 2 }
+  )
 
   const addAlt = useAddAlternative(channel?.id ?? 0)
   const removeAlt = useRemoveAlternative(channel?.id ?? 0)
@@ -129,18 +142,34 @@ export function AlternativesDialog({ open, onOpenChange, channel }: Alternatives
 
           {/* Add alternative */}
           <div className="flex gap-2">
-            <Select value={selectedAlt} onValueChange={setSelectedAlt}>
-              <SelectTrigger aria-label="Canal alternativo" className="min-w-0 flex-1">
-                <SelectValue placeholder="Seleccionar canal alternativo..." />
-              </SelectTrigger>
-              <SelectContent>
-                {availableToAdd.map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <Input
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setSelectedAlt('') }}
+                placeholder="Buscar canal alternativo (mín. 2 letras)…"
+                aria-label="Buscar canal alternativo"
+              />
+              {debouncedSearch.length >= 2 && (
+                <ul role="listbox" aria-label="Resultados" className="max-h-48 overflow-y-auto rounded-lg border border-border bg-background">
+                  {availableToAdd.length === 0 ? (
+                    <li className="px-3 py-2 text-xs text-label">{searching ? 'Buscando…' : 'Sin resultados'}</li>
+                  ) : (
+                    availableToAdd.map((c) => (
+                      <li key={c.id} role="option" aria-selected={selectedAlt === String(c.id)}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedAlt(String(c.id))}
+                          className={`flex w-full flex-col px-3 py-1.5 text-left text-sm hover:bg-raised ${selectedAlt === String(c.id) ? 'bg-active' : ''}`}
+                        >
+                          <span className="truncate">{c.name}</span>
+                          <span className="truncate text-xs text-label">{c.source_name ?? 'Manual'}</span>
+                        </button>
+                      </li>
+                    ))
+                  )}
+                </ul>
+              )}
+            </div>
             <Button
               onClick={handleAdd}
               disabled={!selectedAlt || addAlt.isPending}

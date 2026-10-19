@@ -101,6 +101,64 @@ async function fetchCategories(base, user, pass) {
 }
 
 /**
+ * Reduce a player_api.php response to the account facts publishing cares about.
+ */
+function parseAccountInfo(info) {
+  const u = (info && info.user_info) || {};
+  const exp = Number(u.exp_date);
+  const formats = Array.isArray(u.allowed_output_formats)
+    ? u.allowed_output_formats.map((f) => String(f).toLowerCase())
+    : [];
+  return {
+    status: u.status || '',
+    expiresAt: exp > 0 ? new Date(exp * 1000).toISOString() : null, // null = no expiry
+    maxConnections: Number(u.max_connections) || 0,
+    activeConnections: Number(u.active_cons) || 0,
+    allowedFormats: formats, // empty = panel did not say
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+/** Fetch only the account info (cheap: no stream list). */
+async function fetchXtreamAccountInfo(host, username, password) {
+  const base = buildBase(host);
+  const info = await fetchJson(`${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`);
+  if (!info || info.user_info === undefined) throw new Error('Invalid Xtream credentials or server response');
+  return parseAccountInfo(info);
+}
+
+/**
+ * Full account check for the "verify source" action: auth, status, expiry, connections.
+ * Account-level problems come back as `problem` instead of throwing.
+ */
+async function verifyXtreamAccount(host, username, password) {
+  const base = buildBase(host);
+  const info = await fetchJson(`${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`);
+  const u = info && info.user_info;
+  if (!u) return { ok: false, problem: 'El servidor no reconoce las credenciales (usuario inexistente o respuesta inválida).' };
+
+  const account = parseAccountInfo(info);
+  const auth = Number(u.auth);
+  const status = String(u.status || '').toLowerCase();
+  let problem = null;
+  if (auth === 0) problem = 'Autenticación rechazada: usuario o contraseña incorrectos.';
+  else if (status === 'banned') problem = 'La cuenta está baneada.';
+  else if (status === 'disabled') problem = 'La cuenta está deshabilitada.';
+  else if (status === 'expired' || (account.expiresAt && new Date(account.expiresAt) < new Date())) problem = 'La suscripción está expirada.';
+  else if (status && status !== 'active') problem = `Estado de cuenta: ${u.status}.`;
+
+  return {
+    ok: !problem,
+    problem,
+    status: u.status || '',
+    expiresAt: account.expiresAt,
+    isTrial: String(u.is_trial) === '1',
+    maxConnections: account.maxConnections,
+    activeConnections: account.activeConnections,
+  };
+}
+
+/**
  * Fetch all live streams from the Xtream Codes panel and convert them
  * into channel objects compatible with importChannels().
  *
@@ -137,8 +195,11 @@ async function fetchXtreamChannels(host, username, password) {
     throw new Error('Unexpected response format from Xtream live streams API');
   }
 
-  // Determine stream extension (prefer ts, fallback to m3u8)
-  const ext = 'ts';
+  // Prefer ts; use m3u8 when the panel only allows that
+  const account = parseAccountInfo(info);
+  const ext = account.allowedFormats.length && !account.allowedFormats.includes('ts') && account.allowedFormats.includes('m3u8')
+    ? 'm3u8'
+    : 'ts';
 
   const channels = streams
     .filter((s) => s && s.stream_id)
@@ -162,7 +223,7 @@ async function fetchXtreamChannels(host, username, password) {
       };
     });
 
-  return { channels, epgUrl };
+  return { channels, epgUrl, account };
 }
 
-module.exports = { fetchXtreamChannels, buildBase };
+module.exports = { fetchXtreamChannels, verifyXtreamAccount, fetchXtreamAccountInfo, buildBase };

@@ -399,6 +399,8 @@ async function runHealthCheck(force = false, sourceId = null) {
   // Recalculate source priorities automatically
   recalculateSourcePriorities();
 
+  require('./gist-publisher').schedulePublish();
+
   console.log(`[HealthChecker] Done. ✅ ${healthy} healthy, ⚠️ ${degraded} degraded, ❌ ${down} down`);
   } finally {
     isChecking = false;

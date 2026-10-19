@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router'
-import { Link as LinkIcon, Plus, RefreshCw, Pencil, Trash2, Loader2, Eye, EyeOff, Activity } from 'lucide-react'
+import { Link as LinkIcon, Plus, RefreshCw, Pencil, Trash2, Loader2, Eye, EyeOff, Activity, ShieldCheck } from 'lucide-react'
 import { PageHeader } from '@/components/shared/page-header'
 import { EmptyState } from '@/components/shared/empty-state'
 import { Button } from '@/components/ui/button'
@@ -16,12 +16,13 @@ import {
 } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
-  useSources, useUpdateSource, useDeleteSource, useSyncSource,
+  useSources, useUpdateSource, useDeleteSource, useSyncSource, useVerifySource,
   usePreviewSource, useImportUrl, useImportText, useImportXtream,
 } from '@/hooks/use-sources'
-import { useHealthStatus, useHealthChannels, useCheckNow, useCancelCheck } from '@/hooks/use-health'
+import { useHealthStatus, useHealthBreakdown, useCheckNow, useCancelCheck } from '@/hooks/use-health'
 import { STATUS_COLOR } from '@/lib/status'
 import { ImportPreviewDialog } from '@/components/sources/ImportPreviewDialog'
+import { ExcludedGroupsEditor } from '@/components/sources/ExcludedGroupsEditor'
 import { formatRelativeDate } from '@/lib/utils'
 import type { ImportPrefill } from '@/pages/checker'
 import type { Source, SourcePreviewResponse, PreviewContext } from '@/lib/types'
@@ -32,6 +33,9 @@ export default function SourcesPage() {
   const updateSource  = useUpdateSource()
   const deleteSource  = useDeleteSource()
   const syncSource    = useSyncSource()
+  const verifySource  = useVerifySource()
+  const [verifyingId, setVerifyingId] = useState<number | null>(null)
+  const [verifyingAll, setVerifyingAll] = useState(false)
   const previewSource = usePreviewSource()
   const importUrl     = useImportUrl()
   const importText    = useImportText()
@@ -45,6 +49,8 @@ export default function SourcesPage() {
   const [editSource,       setEditSource]       = useState<Source | null>(null)
   const [deleteTarget,     setDeleteTarget]     = useState<Source | null>(null)
   const [deleteChannels,   setDeleteChannels]   = useState(false)
+  const [editExcluded,     setEditExcluded]     = useState<string[]>([])
+  useEffect(() => { setEditExcluded(editSource?.excluded_groups ?? []) }, [editSource])
 
   // ── Preview state ────────────────────────────────────────────────────────
   const [previewOpen,    setPreviewOpen]    = useState(false)
@@ -77,23 +83,14 @@ export default function SourcesPage() {
   // ── Verificación de salud por fuente ─────────────────────────────────────
   const qc = useQueryClient()
   const { data: healthStatus } = useHealthStatus()
-  const { data: healthChannels } = useHealthChannels()
+  const { data: healthBreakdown } = useHealthBreakdown()
   const checkNow = useCheckNow()
   const cancelCheck = useCancelCheck()
   const isChecking = healthStatus?.isChecking ?? false
   const checkingSourceId = healthStatus?.checkingSourceId ?? null
   const progress = healthStatus?.progress
 
-  const healthBySource = new Map<number, { ok: number; deg: number; down: number; total: number }>()
-  for (const ch of healthChannels?.channels ?? []) {
-    if (ch.source_id === null) continue
-    const e = healthBySource.get(ch.source_id) ?? { ok: 0, deg: 0, down: 0, total: 0 }
-    e.total++
-    if (ch.health_status === 'healthy') e.ok++
-    else if (ch.health_status === 'degraded' || ch.health_status === 'intermittent') e.deg++
-    else if (ch.health_status === 'down') e.down++
-    healthBySource.set(ch.source_id, e)
-  }
+  const healthBySource = new Map((healthBreakdown?.bySource ?? []).map((r) => [r.id, r]))
 
   const handleCheckSource = async (src: Source) => {
     try {
@@ -193,6 +190,7 @@ export default function SourcesPage() {
         syncIntervalHours: Number(srcInterval) || 24,
         priority: Number(srcPriority) || 1,
         autoPriority: srcAutoPriority ? 1 : 0,
+        excludedGroups: editExcluded,
       })
       toast.success('Fuente actualizada')
       setDialogOpen(false)
@@ -217,6 +215,7 @@ export default function SourcesPage() {
         syncIntervalHours: Number(xtInterval) || 24,
         priority: editSource.priority ?? 1,
         autoPriority: editSource.auto_priority ?? 1,
+        excludedGroups: editExcluded,
       })
       toast.success('Fuente Xtream actualizada')
       setDialogOpen(false)
@@ -295,20 +294,21 @@ export default function SourcesPage() {
   }
 
   // ── Confirm import (called from ImportPreviewDialog) ──────────────────────
-  const handleImportConfirmed = async (selectedUrls: string[]) => {
+  const handleImportConfirmed = async (selectedUrls: string[], excludedGroups: string[]) => {
     if (!previewContext) return
     try {
       let res
       if (previewContext.type === 'url') {
-        res = await importUrl.mutateAsync({ ...previewContext, selectedUrls })
+        res = await importUrl.mutateAsync({ ...previewContext, selectedUrls, excludedGroups })
       } else if (previewContext.type === 'text') {
         res = await importText.mutateAsync({
           text: previewContext.text,
           sourceName: previewContext.name,
           selectedUrls,
+          excludedGroups,
         })
       } else {
-        res = await importXtream.mutateAsync({ ...previewContext, selectedUrls })
+        res = await importXtream.mutateAsync({ ...previewContext, selectedUrls, excludedGroups })
       }
 
       const parts = [
@@ -332,6 +332,55 @@ export default function SourcesPage() {
 
   const totalChannels = sources.reduce((n, x) => n + (x.channel_count ?? 0), 0)
   const isImporting = importUrl.isPending || importText.isPending || importXtream.isPending
+
+  // ── Verify source connection (not channels) ──────────────────────────────
+  const handleVerify = async (src: Source) => {
+    setVerifyingId(src.id)
+    try {
+      const r = await verifySource.mutateAsync(src.id)
+      if (!r.ok) {
+        toast.error(`${src.name}: ${r.problem ?? 'la fuente no responde correctamente'}`)
+        return
+      }
+      const parts: string[] = []
+      if (r.type === 'xtream') {
+        parts.push(r.status ? `estado ${r.status}` : 'cuenta activa')
+        parts.push(r.expiresAt ? `vence ${new Date(r.expiresAt).toLocaleDateString('es-AR')}` : 'sin vencimiento')
+        if (r.maxConnections) parts.push(`${r.activeConnections ?? 0} de ${r.maxConnections} conexiones en uso`)
+        if (r.isTrial) parts.push('prueba')
+      } else {
+        parts.push('lista M3U accesible')
+      }
+      if (r.latencyMs != null) parts.push(`${r.latencyMs} ms`)
+      toast.success(`${src.name}: ${parts.join(' · ')}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al verificar la fuente')
+    } finally {
+      setVerifyingId(null)
+    }
+  }
+
+  const handleVerifyAll = async () => {
+    const targets = sources.filter((x) => x.type === 'url' || x.type === 'xtream')
+    if (targets.length === 0) return
+    setVerifyingAll(true)
+    let ok = 0
+    const failed: string[] = []
+    for (const src of targets) {
+      setVerifyingId(src.id)
+      try {
+        const r = await verifySource.mutateAsync(src.id)
+        if (r.ok) ok++
+        else failed.push(`${src.name}: ${r.problem ?? 'no responde correctamente'}`)
+      } catch (err) {
+        failed.push(`${src.name}: ${err instanceof Error ? err.message : 'error al verificar'}`)
+      }
+    }
+    setVerifyingId(null)
+    setVerifyingAll(false)
+    failed.forEach((m) => toast.error(m))
+    if (ok > 0) toast.success(`${ok} de ${targets.length} ${targets.length === 1 ? 'fuente' : 'fuentes'} con conexión OK`)
+  }
 
   // ── Sync ─────────────────────────────────────────────────────────────────
   const handleSync = async (id: number) => {
@@ -435,6 +484,14 @@ export default function SourcesPage() {
               {syncingId === 'all' && <Loader2 aria-hidden="true" className="animate-spin" />}
               Sincronizar todas
             </Button>
+            <Button
+              variant="secondary"
+              onClick={handleVerifyAll}
+              disabled={verifyingId !== null || verifyingAll || !sources.some((x) => x.type === 'url' || x.type === 'xtream')}
+            >
+              {verifyingAll ? <Loader2 aria-hidden="true" className="animate-spin" /> : <ShieldCheck aria-hidden="true" />}
+              Verificar todas
+            </Button>
             <Button onClick={openCreate}>
               <Plus aria-hidden="true" />
               Agregar fuente
@@ -516,6 +573,46 @@ export default function SourcesPage() {
                     {syncing ? 'sincronizando…' : source.last_synced_at ? formatRelativeDate(source.last_synced_at) : 'nunca'}
                   </dd>
                 </dl>
+                {source.verify_info && (() => {
+                  const v = source.verify_info
+                  const color = v.ok ? STATUS_COLOR.healthy : STATUS_COLOR.down
+                  const exp = v.expiresAt ? new Date(v.expiresAt) : null
+                  const daysLeft = exp ? Math.ceil((exp.getTime() - Date.now()) / 86_400_000) : null
+                  const items: { label: string; value: string; title?: string }[] = []
+                  if (v.type === 'xtream') {
+                    if (v.status) items.push({ label: 'Estado', value: v.status })
+                    items.push({
+                      label: 'Vence',
+                      value: exp ? `${exp.toLocaleDateString('es-AR')}${daysLeft !== null ? (daysLeft >= 0 ? ` (${daysLeft} d)` : ' (vencida)') : ''}` : 'sin vencimiento',
+                    })
+                    if (v.maxConnections) {
+                      items.push({
+                        label: 'Conexiones',
+                        value: `${v.activeConnections ?? 0} de ${v.maxConnections} en uso`,
+                        title: 'Streams que se están viendo ahora con esta cuenta, sobre el máximo simultáneo que permite',
+                      })
+                    }
+                    if (v.isTrial) items.push({ label: 'Cuenta', value: 'de prueba' })
+                  }
+                  if (v.latencyMs != null) items.push({ label: 'Respuesta', value: `${v.latencyMs} ms` })
+                  return (
+                    <div className="flex basis-full flex-wrap items-center gap-x-6 gap-y-1.5 border-t border-border pt-3">
+                      <span className="flex items-center gap-2 font-mono text-[13px]" style={{ color }}>
+                        <span aria-hidden="true" className="size-2 rounded-full" style={{ background: color }} />
+                        {v.ok ? 'Conexión OK' : v.problem ?? 'Con problemas'}
+                      </span>
+                      {items.map((it) => (
+                        <span key={it.label} className="flex items-baseline gap-1.5" title={it.title}>
+                          <span className="text-[11px] tracking-[0.08em] text-label uppercase">{it.label}</span>
+                          <span className="font-mono text-[13px]">{it.value}</span>
+                        </span>
+                      ))}
+                      <span className="ml-auto font-mono text-xs text-[#7C838C]">
+                        verificada {formatRelativeDate(v.checkedAt)}
+                      </span>
+                    </div>
+                  )
+                })()}
                 <div className="flex basis-full flex-wrap justify-end gap-2 border-t border-border pt-4">
                   {source.channel_count > 0 && (
                     isChecking && checkingSourceId === source.id ? (
@@ -534,6 +631,12 @@ export default function SourcesPage() {
                         Verificar canales
                       </Button>
                     )
+                  )}
+                  {source.type !== 'manual' && (
+                    <Button variant="secondary" onClick={() => handleVerify(source)} disabled={verifyingId !== null || verifyingAll}>
+                      {verifyingId === source.id ? <Loader2 aria-hidden="true" className="animate-spin" /> : <ShieldCheck aria-hidden="true" />}
+                      Verificar fuente
+                    </Button>
                   )}
                   {canSync && (
                     <Button variant="secondary" onClick={() => handleSync(source.id)} disabled={syncingId !== null}>
@@ -690,6 +793,8 @@ export default function SourcesPage() {
               </div>
             </div>
           )}
+
+          {isEditing && <ExcludedGroupsEditor groups={editExcluded} onChange={setEditExcluded} />}
 
           <DialogFooter>
             <Button variant="secondary" onClick={() => { setDialogOpen(false); setEditSource(null) }}>Cancelar</Button>

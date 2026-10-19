@@ -35,9 +35,9 @@ function normalizeName(name) {
 function urlKey(url) {
   try {
     const u = new URL(url);
-    // Key = protocol + host + port + first 2 path segments
-    const pathParts = u.pathname.split('/').filter(Boolean).slice(0, 2);
-    return `${u.protocol}//${u.host}/${pathParts.join('/')}`;
+    // Key = protocol + host + port + full path. Only the first segments is too coarse:
+    // every channel of one Xtream account (/live/user/pass/<id>.ts) would collide.
+    return `${u.protocol}//${u.host}${u.pathname}`;
   } catch {
     return url.toLowerCase().trim();
   }
@@ -51,24 +51,63 @@ function levenshtein(a, b) {
   if (!a.length) return b.length;
   if (!b.length) return a.length;
 
-  const matrix = [];
-  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
-  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+  let prev = new Array(a.length + 1);
+  let cur = new Array(a.length + 1);
+  for (let j = 0; j <= a.length; j++) prev[j] = j;
 
   for (let i = 1; i <= b.length; i++) {
+    cur[0] = i;
     for (let j = 1; j <= a.length; j++) {
-      if (b[i - 1] === a[j - 1]) {
-        matrix[i][j] = matrix[i - 1][j - 1];
-      } else {
-        matrix[i][j] = 1 + Math.min(
-          matrix[i - 1][j],     // deletion
-          matrix[i][j - 1],     // insertion
-          matrix[i - 1][j - 1]  // substitution
-        );
-      }
+      cur[j] = b[i - 1] === a[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j], cur[j - 1], prev[j - 1]);
     }
+    [prev, cur] = [cur, prev];
   }
-  return matrix[b.length][a.length];
+  return prev[a.length];
+}
+
+/**
+ * True when similarity(a, b) >= threshold. Bails out as soon as the edit distance
+ * can no longer stay under the allowed maximum (no full matrix for clear misses).
+ */
+function charProfile(str) {
+  const p = new Uint8Array(37); // a-z, 0-9, space
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    p[c === 32 ? 36 : c >= 97 ? c - 97 : c - 22]++;
+  }
+  return p;
+}
+
+function isSimilar(a, b, threshold, pa, pb) {
+  if (a === b) return true;
+  const maxLen = Math.max(a.length, b.length);
+  const maxDist = Math.floor(maxLen * (1 - threshold / 100) + 1e-9);
+  if (Math.abs(a.length - b.length) > maxDist) return false;
+  if (maxDist === 0) return false;
+  if (pa && pb) {
+    // each edit changes the letter histogram by at most 2, so a big gap can't be within maxDist
+    let diff = 0;
+    for (let k = 0; k < 37; k++) diff += pa[k] > pb[k] ? pa[k] - pb[k] : pb[k] - pa[k];
+    if (diff > 2 * maxDist) return false;
+  }
+
+  let prev = new Array(a.length + 1);
+  let cur = new Array(a.length + 1);
+  for (let j = 0; j <= a.length; j++) prev[j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    cur[0] = i;
+    let rowMin = i;
+    for (let j = 1; j <= a.length; j++) {
+      const v = b[i - 1] === a[j - 1] ? prev[j - 1] : 1 + Math.min(prev[j], cur[j - 1], prev[j - 1]);
+      cur[j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > maxDist) return false;
+    [prev, cur] = [cur, prev];
+  }
+  return prev[a.length] <= maxDist;
 }
 
 /**
@@ -128,51 +167,64 @@ function detectDuplicates(channels, threshold = 80) {
   }
 
   // ── Phase 2: Name similarity deduplication ───────────────────────────────────
-  const remaining = channels.filter((c) => !processed.has(c.id));
+  // Channels are first collapsed by normalized name (O(n)); fuzzy comparison then runs
+  // only between distinct names that share a 3-char prefix and a compatible length,
+  // instead of every pair of channels.
+  const byName = new Map(); // normalized name → [channels]
+  for (const c of channels) {
+    if (processed.has(c.id)) continue;
+    const norm = normalizeName(c.name);
+    if (!norm) continue;
+    if (!byName.has(norm)) byName.set(norm, []);
+    byName.get(norm).push(c);
+  }
 
-  for (let i = 0; i < remaining.length; i++) {
-    if (processed.has(remaining[i].id)) continue;
-    const a = remaining[i];
-    const normA = normalizeName(a.name);
-    if (!normA) continue;
+  const blocks = new Map(); // prefix → [normalized names]
+  for (const norm of byName.keys()) {
+    const key = norm.slice(0, 3);
+    if (!blocks.has(key)) blocks.set(key, []);
+    blocks.get(key).push(norm);
+  }
 
-    const matchGroup = [a];
+  const usedNames = new Set();
+  const profiles = new Map(); // normalized name → letter histogram (prefilter)
+  for (const norm of byName.keys()) profiles.set(norm, charProfile(norm));
 
-    for (let j = i + 1; j < remaining.length; j++) {
-      if (processed.has(remaining[j].id)) continue;
-      const b = remaining[j];
-      const normB = normalizeName(b.name);
-      if (!normB) continue;
+  for (const names of blocks.values()) {
+    names.sort((x, y) => x.length - y.length);
+    for (let i = 0; i < names.length; i++) {
+      const normA = names[i];
+      if (usedNames.has(normA)) continue;
 
-      const score = similarity(normA, normB);
-      if (score >= threshold) {
-        matchGroup.push(b);
+      const members = [normA];
+      for (let j = i + 1; j < names.length; j++) {
+        const normB = names[j];
+        // sorted by length: once the gap exceeds the allowed distance, no later name can match
+        if (normB.length - normA.length > Math.floor(normB.length * (1 - threshold / 100) + 1e-9)) break;
+        if (usedNames.has(normB)) continue;
+        if (isSimilar(normA, normB, threshold, profiles.get(normA), profiles.get(normB))) members.push(normB);
       }
+
+      const matchGroup = members.flatMap((n) => byName.get(n));
+      members.forEach((n) => usedNames.add(n));
+      if (matchGroup.length < 2) continue;
+
+      const suggested = matchGroup.reduce((best, c) => {
+        if (!best) return c;
+        return healthScore(c.health_status) > healthScore(best.health_status) ? c : best;
+      }, null);
+
+      const avgScore = members.length === 1
+        ? 100
+        : matchGroup.reduce((sum, c) => sum + similarity(normA, normalizeName(c.name)), 0) / matchGroup.length;
+
+      groups.push({
+        channels: matchGroup,
+        reason: 'name',
+        score: Math.round(avgScore),
+        suggestedPrimaryId: suggested ? suggested.id : matchGroup[0].id,
+      });
     }
-
-    if (matchGroup.length < 2) continue;
-
-    matchGroup.forEach((c) => processed.add(c.id));
-
-    const suggested = matchGroup.reduce((best, c) => {
-      if (!best) return c;
-      const scoreA = healthScore(best.health_status);
-      const scoreB = healthScore(c.health_status);
-      if (scoreB > scoreA) return c;
-      return best;
-    }, null);
-
-    const avgScore = matchGroup.reduce((sum, c, idx) => {
-      if (idx === 0) return sum;
-      return sum + similarity(normalizeName(matchGroup[0].name), normalizeName(c.name));
-    }, 100) / matchGroup.length;
-
-    groups.push({
-      channels: matchGroup,
-      reason: 'name',
-      score: Math.round(avgScore),
-      suggestedPrimaryId: suggested ? suggested.id : matchGroup[0].id,
-    });
   }
 
   return groups;

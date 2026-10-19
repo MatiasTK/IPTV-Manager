@@ -7,9 +7,10 @@ const { URL } = require('url');
 const db = require('../db/database');
 const { authMiddleware, csrfMiddleware } = require('../middleware/auth');
 const { parseM3U } = require('../services/m3u-parser');
-const { fetchXtreamChannels } = require('../services/xtream-fetcher');
+const { fetchXtreamChannels, verifyXtreamAccount } = require('../services/xtream-fetcher');
 const { detectDuplicates } = require('../services/duplicate-detector');
 const { recalculateSourcePriorities } = require('../services/health-checker');
+const { schedulePublish } = require('../services/gist-publisher');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -17,9 +18,28 @@ router.use(csrfMiddleware);
 
 const MAX_M3U_SIZE = 150 * 1024 * 1024; // 150MB
 
+/** Normalises a client-supplied list of group names to unique, trimmed strings. */
+function cleanGroupNames(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.filter((g) => typeof g === 'string').map((g) => g.trim()).filter(Boolean))];
+}
+
+function parseVerifyInfo(raw) {
+  try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+
+function parseExcluded(raw) {
+  try { return cleanGroupNames(JSON.parse(raw || '[]')); } catch { return []; }
+}
+
 // ── GET /api/sources ───────────────────────────────────────────────────────────
 router.get('/', (req, res) => {
-  const sources = db.prepare('SELECT * FROM sources ORDER BY created_at DESC').all();
+  const sources = db.prepare('SELECT * FROM sources ORDER BY created_at DESC').all()
+    .map((src) => ({
+      ...src,
+      excluded_groups: parseExcluded(src.excluded_groups),
+      verify_info: parseVerifyInfo(src.verify_info),
+    }));
   res.json({ sources });
 });
 
@@ -80,15 +100,19 @@ router.put('/:id', (req, res) => {
   if (!source) return res.status(404).json({ error: 'Source not found.' });
 
   const { name, url, autoSync, syncIntervalHours, priority, autoPriority,
-          xtreamHost, xtreamUser, xtreamPass } = req.body;
+          xtreamHost, xtreamUser, xtreamPass, excludedGroups } = req.body;
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return res.status(400).json({ error: 'name required.' });
   }
+  // Only touched when the client sends it, so older callers keep the current exclusions
+  const excluded = Array.isArray(excludedGroups)
+    ? JSON.stringify(cleanGroupNames(excludedGroups))
+    : (source.excluded_groups || '[]');
 
   db.prepare(`
     UPDATE sources
     SET name = ?, url = ?, auto_sync = ?, sync_interval_hours = ?, priority = ?, auto_priority = ?,
-        xtream_host = ?, xtream_user = ?, xtream_pass = ?
+        xtream_host = ?, xtream_user = ?, xtream_pass = ?, excluded_groups = ?
     WHERE id = ?
   `).run(
     name.trim().slice(0, 255),
@@ -100,13 +124,15 @@ router.put('/:id', (req, res) => {
     String(xtreamHost || source.xtream_host || '').trim().slice(0, 512),
     String(xtreamUser || source.xtream_user || '').trim().slice(0, 255),
     String(xtreamPass || source.xtream_pass || '').trim().slice(0, 255),
+    excluded,
     id
   );
 
   // Recalculate priorities after updating a source's priority settings
   recalculateSourcePriorities();
 
-  res.json(db.prepare('SELECT * FROM sources WHERE id = ?').get(id));
+  const updated = db.prepare('SELECT * FROM sources WHERE id = ?').get(id);
+  res.json({ ...updated, excluded_groups: parseExcluded(updated.excluded_groups), verify_info: parseVerifyInfo(updated.verify_info) });
 });
 
 // ── DELETE /api/sources/:id ────────────────────────────────────────────────────
@@ -124,6 +150,85 @@ router.delete('/:id', (req, res) => {
   }
   db.prepare('DELETE FROM sources WHERE id = ?').run(id);
   res.json({ ok: true });
+});
+
+/**
+ * Light reachability check of an M3U URL: reads only the first bytes, no full download.
+ * Resolves { ok, problem?, httpStatus?, latencyMs }.
+ */
+function probeM3U(urlStr, redirectsLeft = 5) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    let settled = false;
+    const done = (r) => {
+      if (settled) return;
+      settled = true;
+      resolve({ latencyMs: Date.now() - started, ...r });
+    };
+    let parsed;
+    try { parsed = new URL(urlStr); } catch { return done({ ok: false, problem: 'URL inválida.' }); }
+    const transport = parsed.protocol === 'https:' ? https : http;
+    const req = transport.get(urlStr, { headers: { 'User-Agent': 'IPTV-Manager/1.0' } }, (res) => {
+      const code = res.statusCode;
+      if (code >= 300 && code < 400 && res.headers.location) {
+        res.resume();
+        if (redirectsLeft <= 0) return done({ ok: false, problem: 'Demasiadas redirecciones.' });
+        const loc = res.headers.location;
+        const next = loc.startsWith('http') ? loc : new URL(loc, urlStr).toString();
+        settled = true;
+        return probeM3U(next, redirectsLeft - 1).then(resolve);
+      }
+      if (code !== 200) {
+        res.resume();
+        const hint = code === 401 || code === 403 ? ' (credenciales/token inválido, cuenta baneada o IP bloqueada)'
+          : code === 404 ? ' (la lista ya no existe en esa URL)' : '';
+        return done({ ok: false, httpStatus: code, problem: `El servidor respondió HTTP ${code}${hint}.` });
+      }
+      let head = '';
+      res.setEncoding('utf-8');
+      res.on('data', (chunk) => {
+        head += chunk;
+        if (head.length >= 512) req.destroy();
+      });
+      const finish = () => {
+        done(/^\s*#EXTM3U/i.test(head)
+          ? { ok: true, httpStatus: 200 }
+          : { ok: false, httpStatus: 200, problem: 'Respondió, pero el contenido no es una lista M3U (¿página de error o cuenta expirada?).' });
+      };
+      res.on('end', finish);
+      res.on('close', finish);
+      res.on('error', () => {});
+    });
+    req.on('error', (e) => done({ ok: false, problem: `No se pudo conectar: ${e.message}` }));
+    req.setTimeout(15000, () => { done({ ok: false, problem: 'Tiempo de espera agotado.' }); req.destroy(); });
+  });
+}
+
+// ── POST /api/sources/:id/verify ───────────────────────────────────────────────
+// Checks the connection/account of the source itself (not its channels).
+router.post('/:id/verify', async (req, res) => {
+  const id = Number(req.params.id);
+  const source = db.prepare('SELECT * FROM sources WHERE id = ?').get(id);
+  if (!source) return res.status(404).json({ error: 'Source not found.' });
+
+  let result;
+  try {
+    if (source.type === 'xtream') {
+      const started = Date.now();
+      const r = await verifyXtreamAccount(source.xtream_host, source.xtream_user, source.xtream_pass);
+      result = { type: 'xtream', latencyMs: Date.now() - started, ...r };
+    } else if (source.type === 'url') {
+      result = { type: 'url', ...(await probeM3U(source.url)) };
+    } else {
+      return res.status(400).json({ error: 'Las fuentes manuales no tienen conexión que verificar.' });
+    }
+  } catch (e) {
+    result = { type: source.type, ok: false, problem: `No se pudo conectar con la fuente: ${e.message}` };
+  }
+
+  result.checkedAt = new Date().toISOString();
+  db.prepare('UPDATE sources SET verify_info = ? WHERE id = ?').run(JSON.stringify(result), id);
+  res.json(result);
 });
 
 // ── POST /api/sources/:id/sync ─────────────────────────────────────────────────
@@ -144,6 +249,7 @@ router.post('/:id/sync', async (req, res) => {
       const result = await fetchXtreamChannels(source.xtream_host, source.xtream_user, source.xtream_pass);
       parsed   = result.channels;
       epgUrls  = result.epgUrl ? [result.epgUrl] : [];
+      db.prepare('UPDATE sources SET xtream_info = ? WHERE id = ?').run(JSON.stringify(result.account), id);
     } catch (err) {
       return res.status(502).json({ error: `Failed to fetch Xtream: ${err.message}` });
     }
@@ -164,12 +270,12 @@ router.post('/:id/sync', async (req, res) => {
   }
 
   // Import channels into DB
-  const imported = importChannels(parsed, id);
+  const imported = importChannels(parsed, id, null, parseExcluded(source.excluded_groups));
 
   // Update source metadata
   db.prepare(`
-    UPDATE sources SET last_synced_at = CURRENT_TIMESTAMP, channel_count = ? WHERE id = ?
-  `).run(imported.total, id);
+    UPDATE sources SET last_synced_at = CURRENT_TIMESTAMP, channel_count = ?, epg_urls = ? WHERE id = ?
+  `).run(imported.total, epgUrls.join('\n'), id);
 
   // Detect duplicates after import
   const allChannels = db.prepare('SELECT id, name, url, group_id, health_status FROM channels WHERE is_active = 1').all();
@@ -181,6 +287,7 @@ router.post('/:id/sync', async (req, res) => {
 
   // Recalculate priorities since channel counts / states might have changed
   recalculateSourcePriorities();
+  schedulePublish();
 
   res.json({
     ok: true,
@@ -259,7 +366,7 @@ router.post('/preview', async (req, res) => {
 // ── POST /api/sources/import-url ──────────────────────────────────────────────
 // Fetch M3U from URL, create source, import selected channels.
 router.post('/import-url', async (req, res) => {
-  const { name, url, selectedUrls,
+  const { name, url, selectedUrls, excludedGroups,
           autoSync = 0, syncIntervalHours = 24, priority = 1, autoPriority = 1 } = req.body;
 
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -271,6 +378,8 @@ router.post('/import-url', async (req, res) => {
   try { new URL(url.trim()); } catch {
     return res.status(400).json({ error: 'Invalid URL.' });
   }
+
+  const excluded = cleanGroupNames(excludedGroups);
 
   let m3uText;
   try {
@@ -285,21 +394,22 @@ router.post('/import-url', async (req, res) => {
     : null;
 
   const sourceResult = db.prepare(`
-    INSERT INTO sources (name, url, type, last_synced_at, auto_sync, sync_interval_hours, priority, auto_priority)
-    VALUES (?, ?, 'url', CURRENT_TIMESTAMP, ?, ?, ?, ?)
+    INSERT INTO sources (name, url, type, last_synced_at, auto_sync, sync_interval_hours, priority, auto_priority, excluded_groups)
+    VALUES (?, ?, 'url', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
   `).run(
     name.trim().slice(0, 255),
     url.trim().slice(0, 2048),
     autoSync ? 1 : 0,
     Math.max(1, parseInt(syncIntervalHours || '24', 10)),
     Number(priority) || 1,
-    autoPriority ? 1 : 0
+    autoPriority ? 1 : 0,
+    JSON.stringify(excluded)
   );
 
   const sourceId = sourceResult.lastInsertRowid;
-  const imported = importChannels(parsed, sourceId, urlSet);
+  const imported = importChannels(parsed, sourceId, urlSet, excluded);
 
-  db.prepare('UPDATE sources SET channel_count = ? WHERE id = ?').run(imported.total, sourceId);
+  db.prepare('UPDATE sources SET channel_count = ?, epg_urls = ? WHERE id = ?').run(imported.total, header.epgUrls.join('\n'), sourceId);
   recalculateSourcePriorities();
 
   res.status(201).json({
@@ -317,18 +427,19 @@ router.post('/import-url', async (req, res) => {
 // One-shot Xtream import: creates source + fetches channels immediately
 router.post('/import-xtream', async (req, res) => {
   const { name = 'Xtream Import', xtreamHost, xtreamUser, xtreamPass,
-          selectedUrls,
+          selectedUrls, excludedGroups,
           autoSync = 0, syncIntervalHours = 24, priority = 1, autoPriority = 1 } = req.body;
 
   if (!xtreamHost || !xtreamUser || !xtreamPass) {
     return res.status(400).json({ error: 'xtreamHost, xtreamUser and xtreamPass are required.' });
   }
 
-  let channels, epgUrl;
+  let channels, epgUrl, account;
   try {
     const result = await fetchXtreamChannels(xtreamHost, xtreamUser, xtreamPass);
     channels = result.channels;
     epgUrl   = result.epgUrl;
+    account  = result.account;
   } catch (err) {
     return res.status(502).json({ error: `Failed to connect to Xtream: ${err.message}` });
   }
@@ -336,11 +447,12 @@ router.post('/import-xtream', async (req, res) => {
   const urlSet = Array.isArray(selectedUrls) && selectedUrls.length > 0
     ? new Set(selectedUrls)
     : null;
+  const excluded = cleanGroupNames(excludedGroups);
 
   // Create source
   const sourceResult = db.prepare(`
-    INSERT INTO sources (name, url, type, last_synced_at, auto_sync, sync_interval_hours, priority, auto_priority, xtream_host, xtream_user, xtream_pass)
-    VALUES (?, '', 'xtream', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sources (name, url, type, last_synced_at, auto_sync, sync_interval_hours, priority, auto_priority, xtream_host, xtream_user, xtream_pass, excluded_groups)
+    VALUES (?, '', 'xtream', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     String(name).trim().slice(0, 255),
     autoSync ? 1 : 0,
@@ -349,13 +461,14 @@ router.post('/import-xtream', async (req, res) => {
     autoPriority ? 1 : 0,
     String(xtreamHost).trim().slice(0, 512),
     String(xtreamUser).trim().slice(0, 255),
-    String(xtreamPass).trim().slice(0, 255)
+    String(xtreamPass).trim().slice(0, 255),
+    JSON.stringify(excluded)
   );
 
   const sourceId = sourceResult.lastInsertRowid;
-  const imported = importChannels(channels, sourceId, urlSet);
+  const imported = importChannels(channels, sourceId, urlSet, excluded);
 
-  db.prepare('UPDATE sources SET channel_count = ? WHERE id = ?').run(imported.total, sourceId);
+  db.prepare('UPDATE sources SET channel_count = ?, xtream_info = ?, epg_urls = ? WHERE id = ?').run(imported.total, JSON.stringify(account), epgUrl || '', sourceId);
   recalculateSourcePriorities();
 
   res.json({
@@ -372,7 +485,7 @@ router.post('/import-xtream', async (req, res) => {
 // ── POST /api/sources/import-text ─────────────────────────────────────────────
 // Import M3U from pasted text (no URL)
 router.post('/import-text', (req, res) => {
-  const { text, sourceName = 'Manual Import', selectedUrls } = req.body;
+  const { text, sourceName = 'Manual Import', selectedUrls, excludedGroups } = req.body;
 
   if (!text || typeof text !== 'string' || text.length > MAX_M3U_SIZE) {
     return res.status(400).json({ error: 'M3U text required (max 10MB).' });
@@ -382,17 +495,19 @@ router.post('/import-text', (req, res) => {
     ? new Set(selectedUrls)
     : null;
 
+  const excluded = cleanGroupNames(excludedGroups);
+
   // Create a "manual" source
   const sourceResult = db.prepare(`
-    INSERT INTO sources (name, url, type, last_synced_at)
-    VALUES (?, '', 'manual', CURRENT_TIMESTAMP)
-  `).run(String(sourceName).trim().slice(0, 255));
+    INSERT INTO sources (name, url, type, last_synced_at, excluded_groups)
+    VALUES (?, '', 'manual', CURRENT_TIMESTAMP, ?)
+  `).run(String(sourceName).trim().slice(0, 255), JSON.stringify(excluded));
 
   const sourceId = sourceResult.lastInsertRowid;
   const { header, channels: parsed } = parseM3U(text);
-  const imported = importChannels(parsed, sourceId, urlSet);
+  const imported = importChannels(parsed, sourceId, urlSet, excluded);
 
-  db.prepare('UPDATE sources SET channel_count = ? WHERE id = ?').run(imported.total, sourceId);
+  db.prepare('UPDATE sources SET channel_count = ?, epg_urls = ? WHERE id = ?').run(imported.total, header.epgUrls.join('\n'), sourceId);
 
   // Recalculate priorities since channels were added
   recalculateSourcePriorities();
@@ -482,12 +597,17 @@ function checkDbDuplicates(urls) {
  * @param {Array}    parsed   - channel objects from parseM3U / fetchXtreamChannels
  * @param {number}   sourceId - source row id
  * @param {Set|null} urlSet   - if provided, only channels whose url is in this Set are imported
+ * @param {string[]} excludedGroups - group names whose channels are never imported (per-source blacklist)
  * Returns { created, updated, skipped, total }.
  */
-function importChannels(parsed, sourceId, urlSet) {
-  const toImport = urlSet
-    ? parsed.filter((ch) => urlSet.has(ch.url))
-    : parsed;
+const findByUrlStmt = db.prepare('SELECT id FROM channels WHERE url = ? AND source_id = ?');
+const findOrphanByUrlStmt = db.prepare('SELECT id FROM channels WHERE url = ? AND source_id IS NULL');
+
+function importChannels(parsed, sourceId, urlSet, excludedGroups = []) {
+  const excludedSet = new Set(excludedGroups);
+  const toImport = parsed.filter((ch) =>
+    (!urlSet || urlSet.has(ch.url)) && !(ch.groupTitle && excludedSet.has(ch.groupTitle))
+  );
 
   let created = 0;
   let updated = 0;
@@ -516,17 +636,19 @@ function importChannels(parsed, sourceId, urlSet) {
       const groupId = findOrCreateGroup(ch.groupTitle);
 
       // Check if this exact URL already exists
-      const existing = db.prepare('SELECT id FROM channels WHERE url = ?').get(ch.url);
+      // Same URL in another source is a separate channel (each source is published on its own);
+      // channels without a source (orphans) are adopted.
+      const existing = findByUrlStmt.get(ch.url, sourceId) || findOrphanByUrlStmt.get(ch.url);
       if (existing) {
         db.prepare(`
           UPDATE channels SET
-            name = ?, tvg_id = ?, tvg_name = ?, tvg_logo = ?,
+            source_id = ?, name = ?, tvg_id = ?, tvg_name = ?, tvg_logo = ?,
             group_id = ?, catchup = ?, catchup_source = ?, catchup_days = ?,
             http_user_agent = ?, referrer = ?,
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).run(
-          ch.name, ch.tvgId, ch.tvgName, ch.tvgLogo,
+          sourceId, ch.name, ch.tvgId, ch.tvgName, ch.tvgLogo,
           groupId, ch.catchup, ch.catchupSource, ch.catchupDays,
           ch.httpUserAgent, ch.referrer,
           existing.id

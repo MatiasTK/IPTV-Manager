@@ -486,18 +486,23 @@ router.post('/channels', async (req, res) => {
 
   const PROBE_TIMEOUT   = 5_000;   // 5s per channel
   const SLOW_THRESHOLD  = 2_000;   // >2s = slow
-  const CONCURRENCY     = 30;      // max parallel probes
+  const CONCURRENCY     = 6;       // max parallel probes (high values trigger panel rate limits)
 
   const results = new Array(channels.length);
+  const throttle = { pauseUntil: 0 };
+
+  // Stop probing if the client goes away (closed tab, navigated off)
+  let aborted = false;
+  res.on('close', () => { aborted = true; });
 
   // Concurrency-limited pool
   let idx = 0;
   async function worker() {
-    while (true) {
+    while (!aborted) {
       const i = idx++;
       if (i >= channels.length) break;
       const ch = channels[i];
-      const probeResult = await probeStream(ch.url, PROBE_TIMEOUT, SLOW_THRESHOLD);
+      const probeResult = await probeStream(ch.url, PROBE_TIMEOUT, SLOW_THRESHOLD, throttle);
       results[i] = { ...ch, ...probeResult };
 
       // Stream the check result for this specific channel
@@ -514,11 +519,12 @@ router.post('/channels', async (req, res) => {
   await Promise.all(workers);
 
   // ── 3. Build and send summary ───────────────────────────────────────────────
-  const summary = { total: results.length, online: 0, slow: 0, offline: 0 };
+  const summary = { total: channels.length, online: 0, slow: 0, offline: 0 };
   for (const r of results) {
+    if (!r) continue;
     if (r.health === 'online')  summary.online++;
     else if (r.health === 'slow') summary.slow++;
-    else summary.offline++;
+    else if (r.health === 'offline') summary.offline++;
   }
 
   res.write(JSON.stringify({ type: 'done', summary }) + '\n');
@@ -527,11 +533,22 @@ router.post('/channels', async (req, res) => {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+// Reuse sockets and cap parallel connections per host so a bulk check doesn't
+// open dozens of simultaneous connections against a single IPTV panel.
+const probeHttpAgent  = new http.Agent({ keepAlive: true, maxSockets: 8 });
+const probeHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 8 });
+
+const RATE_LIMIT_STATUS = new Set([429, 503, 509]);
+const MAX_PROBE_RETRIES = 2;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * Probe a stream URL with a HEAD (or GET with immediate abort) request.
- * Returns { health: 'online'|'slow'|'offline', latencyMs: number }
+ * Single HEAD request. Resolves { health, latencyMs, rateLimited, retryAfterMs }.
+ * `rateLimited` means the server pushed back (429/503/509, reset, refused) rather
+ * than the stream being genuinely dead.
  */
-function probeStream(streamUrl, timeoutMs, slowThreshold) {
+function probeOnce(streamUrl, timeoutMs, slowThreshold) {
   return new Promise((resolve) => {
     let parsed;
     try { parsed = new URL(streamUrl); } catch {
@@ -542,29 +559,34 @@ function probeStream(streamUrl, timeoutMs, slowThreshold) {
       return resolve({ health: 'offline', latencyMs: 0 });
     }
 
-    const transport = parsed.protocol === 'https:' ? https : http;
-    const start     = Date.now();
-    let done        = false;
+    const isHttps = parsed.protocol === 'https:';
+    const start   = Date.now();
+    let done      = false;
 
-    const finish = (health) => {
+    const finish = (result) => {
       if (done) return;
       done = true;
-      const latencyMs = Date.now() - start;
-      resolve({ health, latencyMs });
+      resolve(result);
     };
 
-    const req = transport.request(streamUrl, {
+    const req = (isHttps ? https : http).request(streamUrl, {
       method:   'HEAD',
       headers:  { 'User-Agent': 'IPTV-Checker/1.0' },
+      agent:    isHttps ? probeHttpsAgent : probeHttpAgent,
       rejectUnauthorized: false,
     }, (res_) => {
-      // Drain to free socket
       res_.resume();
       const latencyMs = Date.now() - start;
-      const ok = res_.statusCode < 400;
-      if (!done) {
-        done = true;
-        resolve({
+      const code = res_.statusCode;
+      if (RATE_LIMIT_STATUS.has(code)) {
+        const retryAfter = parseInt(res_.headers['retry-after'], 10);
+        finish({
+          health: 'offline', latencyMs: 0, rateLimited: true,
+          retryAfterMs: Number.isFinite(retryAfter) ? Math.min(retryAfter, 30) * 1000 : 0,
+        });
+      } else {
+        const ok = code < 400;
+        finish({
           health:    ok ? (latencyMs > slowThreshold ? 'slow' : 'online') : 'offline',
           latencyMs: ok ? latencyMs : 0,
         });
@@ -572,10 +594,38 @@ function probeStream(streamUrl, timeoutMs, slowThreshold) {
       req.destroy();
     });
 
-    req.on('error', () => finish('offline'));
-    req.setTimeout(timeoutMs, () => { req.destroy(); finish('offline'); });
+    req.on('error', (err) => {
+      const throttled = ['ECONNRESET', 'ECONNREFUSED', 'EPIPE'].includes(err.code);
+      finish({ health: 'offline', latencyMs: 0, rateLimited: throttled });
+    });
+    req.setTimeout(timeoutMs, () => { req.destroy(); finish({ health: 'offline', latencyMs: 0 }); });
     req.end();
   });
+}
+
+/**
+ * Probe a stream URL, backing off and retrying when the server rate-limits us.
+ * `throttle` (optional) is a shared { pauseUntil } object: when any probe hits a
+ * rate limit, every worker waits until it expires.
+ * Returns { health: 'online'|'slow'|'offline'|'unknown', latencyMs: number }.
+ * 'unknown' = still rate-limited after retries, so we can't say it's dead.
+ */
+async function probeStream(streamUrl, timeoutMs, slowThreshold, throttle = null) {
+  let result;
+  for (let attempt = 0; attempt <= MAX_PROBE_RETRIES; attempt++) {
+    if (throttle) {
+      const wait = throttle.pauseUntil - Date.now();
+      if (wait > 0) await sleep(wait);
+    }
+    result = await probeOnce(streamUrl, timeoutMs, slowThreshold);
+    if (!result.rateLimited) break;
+
+    const backoff = result.retryAfterMs || 1500 * 2 ** attempt;
+    if (throttle) throttle.pauseUntil = Math.max(throttle.pauseUntil, Date.now() + backoff);
+    else await sleep(backoff);
+  }
+  if (result.rateLimited) return { health: 'unknown', latencyMs: 0 };
+  return { health: result.health, latencyMs: result.latencyMs };
 }
 
 /**

@@ -6,58 +6,82 @@ const http = require('http');
 const { URL } = require('url');
 const db = require('../db/database');
 const { authMiddleware, csrfMiddleware } = require('../middleware/auth');
-const { detectDuplicates } = require('../services/duplicate-detector');
+const path = require('path');
+const { Worker } = require('worker_threads');
+const config = require('../config');
 
 const router = express.Router();
 router.use(authMiddleware);
 router.use(csrfMiddleware);
 
 // ── GET /api/channels/logo-proxy ────────────────────────────────────────────────
-router.get('/logo-proxy', (req, res) => {
+// A page shows ~100 logos at once, so fetches are cached (hits and failures),
+// limited in concurrency and time-boxed: one dead logo host must not stall the server.
+const LOGO_TTL_MS = 24 * 60 * 60 * 1000;
+const LOGO_FAIL_TTL_MS = 30 * 60 * 1000;
+const LOGO_MAX_ENTRIES = 3000;
+const LOGO_MAX_BYTES = 1024 * 1024;
+const LOGO_CONCURRENCY = 6;
+const logoCache = new Map(); // url → { at, body, type } | { at, failed: true }
+let logoActive = 0;
+const logoQueue = [];
+
+function withLogoSlot(task) {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      logoActive++;
+      task().then(resolve, reject).finally(() => {
+        logoActive--;
+        const next = logoQueue.shift();
+        if (next) next();
+      });
+    };
+    if (logoActive < LOGO_CONCURRENCY) run();
+    else logoQueue.push(run);
+  });
+}
+
+async function fetchLogo(url) {
+  const resp = await fetch(url, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(5000),
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const body = Buffer.from(await resp.arrayBuffer());
+  if (body.length > LOGO_MAX_BYTES) throw new Error('too large');
+  return { body, type: resp.headers.get('content-type') || 'image/png' };
+}
+
+router.get('/logo-proxy', async (req, res) => {
   const logoUrl = req.query.url;
   if (!logoUrl) return res.status(400).send('url required');
 
+  let parsedUrl;
   try {
-    const parsedUrl = new URL(logoUrl);
-    const client = parsedUrl.protocol === 'https:' ? https : http;
-
-    const options = {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      }
-    };
-
-    const proxyReq = client.get(parsedUrl, options, (proxyRes) => {
-      if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
-        try {
-          const redirectUrl = new URL(proxyRes.headers.location, logoUrl);
-          const redirectReq = client.get(redirectUrl, options, (redRes) => {
-            res.writeHead(redRes.statusCode, {
-              'Content-Type': redRes.headers['content-type'] || 'image/png',
-              'Cache-Control': 'public, max-age=86400',
-            });
-            redRes.pipe(res);
-          });
-          redirectReq.on('error', () => res.status(500).send('Error fetching logo redirect'));
-          return;
-        } catch {
-          // fall through
-        }
-      }
-
-      res.writeHead(proxyRes.statusCode, {
-        'Content-Type': proxyRes.headers['content-type'] || 'image/png',
-        'Cache-Control': 'public, max-age=86400',
-      });
-      proxyRes.pipe(res);
-    });
-
-    proxyReq.on('error', () => {
-      res.status(500).send('Error fetching logo');
-    });
-  } catch (err) {
-    res.status(400).send('Invalid URL');
+    parsedUrl = new URL(logoUrl);
+    if (!/^https?:$/.test(parsedUrl.protocol)) throw new Error('protocol');
+  } catch {
+    return res.status(400).send('Invalid URL');
   }
+
+  const key = parsedUrl.href;
+  let entry = logoCache.get(key);
+  if (entry && Date.now() - entry.at > (entry.failed ? LOGO_FAIL_TTL_MS : LOGO_TTL_MS)) entry = null;
+
+  if (!entry) {
+    try {
+      entry = { at: Date.now(), ...(await withLogoSlot(() => fetchLogo(key))) };
+    } catch {
+      entry = { at: Date.now(), failed: true };
+    }
+    if (logoCache.size >= LOGO_MAX_ENTRIES) logoCache.delete(logoCache.keys().next().value);
+    logoCache.set(key, entry);
+  }
+
+  if (entry.failed) return res.status(404).send('Logo unavailable');
+  res.set({ 'Content-Type': entry.type, 'Cache-Control': 'public, max-age=86400' });
+  res.send(entry.body);
 });
 
 // ── GET /api/channels ──────────────────────────────────────────────────────────
@@ -152,18 +176,74 @@ router.get('/ids', (req, res) => {
 });
 
 // ── GET /api/channels/duplicates ───────────────────────────────────────────────
-router.get('/duplicates', (req, res) => {
-  const threshold = parseInt(req.query.threshold || '80', 10);
-  const channels = db.prepare(`
-    SELECT c.id, c.name, c.url, c.group_id, c.health_status, c.health_latency_ms, c.is_active,
-           s.name AS source_name
-    FROM channels c
-    LEFT JOIN sources s ON c.source_id = s.id
-    WHERE c.is_active = 1
-  `).all();
+// Detection is expensive on big libraries, so the result is cached per
+// (threshold, source) and served in pages. `refresh=1` forces a re-scan.
+const DUP_CACHE_TTL_MS = 5 * 60 * 1000;
+const dupCache = new Map();
 
-  const groups = detectDuplicates(channels, threshold);
-  res.json({ groups, count: groups.length });
+const inflight = new Map();
+
+function findDuplicateGroups(threshold, sourceId, refresh) {
+  const key = `${threshold}:${sourceId ?? 'all'}`;
+  const hit = dupCache.get(key);
+  if (!refresh && hit && Date.now() - hit.at < DUP_CACHE_TTL_MS) return Promise.resolve(hit.groups);
+  if (inflight.has(key)) return inflight.get(key);
+
+  const job = new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, '../services/duplicate-worker.js'), {
+      workerData: { dbPath: config.dbPath, threshold, sourceId },
+    });
+    worker.once('message', ({ groups }) => {
+      groups.sort((a, b) => (a.reason === b.reason ? b.score - a.score || b.channels.length - a.channels.length : a.reason === 'url' ? -1 : 1));
+      dupCache.set(key, { at: Date.now(), groups });
+      resolve(groups);
+    });
+    worker.once('error', reject);
+  }).finally(() => inflight.delete(key));
+
+  inflight.set(key, job);
+  return job;
+}
+
+function parseDupQuery(q) {
+  const threshold = Math.min(100, Math.max(50, parseInt(q.threshold || '80', 10) || 80));
+  const sourceId = q.source ? Number(q.source) || null : null;
+  return { threshold, sourceId };
+}
+
+router.get('/duplicates', async (req, res) => {
+  const { threshold, sourceId } = parseDupQuery(req.query);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '30', 10) || 30));
+  const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
+
+  let all;
+  try {
+    all = await findDuplicateGroups(threshold, sourceId, req.query.refresh === '1');
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+  res.json({ groups: all.slice(offset, offset + limit), count: all.length, offset, limit });
+});
+
+// ── POST /api/channels/duplicates/auto-group ──────────────────────────────────
+// Server-side bulk merge of every detected group (suggested channel = primary)
+router.post('/duplicates/auto-group', async (req, res) => {
+  const { threshold, sourceId } = parseDupQuery(req.body || {});
+  let groups;
+  try {
+    groups = await findDuplicateGroups(threshold, sourceId, true);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+  const insert = db.prepare('INSERT OR IGNORE INTO channel_alternatives (primary_channel_id, alternative_channel_id, priority) VALUES (?, ?, ?)');
+  const run = db.transaction(() => {
+    for (const g of groups) {
+      g.channels.filter((c) => c.id !== g.suggestedPrimaryId).forEach((c, i) => insert.run(g.suggestedPrimaryId, c.id, i));
+    }
+  });
+  run();
+  dupCache.clear();
+  res.json({ ok: true, groups: groups.length });
 });
 
 // ── GET /api/channels/:id ──────────────────────────────────────────────────────
@@ -371,12 +451,19 @@ router.post('/bulk-alternatives', (req, res) => {
   });
 
   merge();
+  dupCache.clear();
   res.status(201).json({ ok: true });
 });
 
 // ── POST /api/channels/delete-down ───────────────────────────────────────────
 router.post('/delete-down', (req, res) => {
-  const result = db.prepare("DELETE FROM channels WHERE health_status = 'down' AND is_active = 1").run();
+  // Optional `source` (id | 'none' | 'all') limits the purge to one source
+  const src = (req.body || {}).source;
+  let sql = "DELETE FROM channels WHERE health_status = 'down' AND is_active = 1";
+  const params = [];
+  if (src === 'none') sql += ' AND source_id IS NULL';
+  else if (src !== undefined && src !== 'all' && Number.isInteger(Number(src))) { sql += ' AND source_id = ?'; params.push(Number(src)); }
+  const result = db.prepare(sql).run(...params);
   res.json({ ok: true, deletedCount: result.changes });
 });
 

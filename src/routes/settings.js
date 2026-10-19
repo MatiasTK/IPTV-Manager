@@ -20,7 +20,7 @@ router.get('/', (req, res) => {
 
 // ── PUT /api/settings ──────────────────────────────────────────────────────────
 router.put('/', (req, res) => {
-  const allowed = ['playlist_name', 'epg_urls', 'health_check_enabled', 'health_check_interval_minutes', 'duplicate_threshold'];
+  const allowed = ['playlist_name', 'epg_urls', 'health_check_enabled', 'health_check_interval_minutes', 'duplicate_threshold', 'publish_auto'];
   const updates = req.body;
 
   if (typeof updates !== 'object' || Array.isArray(updates)) {
@@ -44,6 +44,7 @@ router.put('/', (req, res) => {
           if (isNaN(n) || n < 1 || n > 1440) continue; // 1 min – 24 h
           val = String(n);
         }
+        if (key === 'publish_auto') val = val === '1' ? '1' : '0';
         if (key === 'health_check_enabled') val = val === '0' ? '0' : '1';
         upsert.run(key, val);
       }

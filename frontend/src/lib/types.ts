@@ -14,6 +14,24 @@ export interface Group {
 }
 
 // ─── Sources ─────────────────────────────────────────────────────────────────
+export interface SourceVerification {
+  type: 'url' | 'xtream'
+  ok: boolean
+  problem?: string | null
+  latencyMs?: number
+  httpStatus?: number
+  /** Xtream account status, e.g. "Active", "Expired", "Banned". */
+  status?: string
+  /** null = no expiry. */
+  expiresAt?: string | null
+  isTrial?: boolean
+  /** Simultaneous streams the account allows. */
+  maxConnections?: number
+  /** Streams being watched right now with this account. */
+  activeConnections?: number
+  checkedAt: string
+}
+
 export interface Source {
   id: number
   name: string
@@ -28,6 +46,10 @@ export interface Source {
   xtream_host: string
   xtream_user: string
   xtream_pass: string
+  /** Group names the sync never imports for this source. */
+  excluded_groups: string[]
+  /** Result of the last "Verificar fuente" run, null if never verified. */
+  verify_info: SourceVerification | null
   created_at: string
 }
 
@@ -138,8 +160,16 @@ export interface AutoSwitchEntry {
   reason: string
 }
 
+export interface HealthSourceSummary {
+  id: number
+  name: string
+  total: number
+  down: number
+}
+
 export interface HealthStatusResponse {
   summary: HealthSummary
+  sources: HealthSourceSummary[]
   autoSwitchLog: AutoSwitchEntry[]
   isChecking: boolean
   progress: { checked: number; total: number }
@@ -181,6 +211,8 @@ export interface DuplicateGroup {
 export interface DuplicatesResponse {
   groups: DuplicateGroup[]
   count: number
+  offset: number
+  limit: number
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -191,4 +223,35 @@ export interface Settings {
   health_check_enabled: string
   health_check_interval_minutes?: string
   duplicate_threshold: string
+  publish_auto?: string
+}
+
+export interface PublishSlot {
+  slot: number
+  sourceId: number | null
+  sourceName: string | null
+  sourceType: 'url' | 'manual' | 'xtream' | null
+  assignedAt: string | null
+  publishedAt: string | null
+  channelCount: number
+  deadExcluded: number
+  lastError: string | null
+  pending: boolean
+  warnings: string[]
+  url: string | null
+}
+
+export interface PublishSlotsResponse {
+  gistId: string | null
+  auto: boolean
+  publishing: boolean
+  slots: PublishSlot[]
+}
+
+export interface PublishPreview {
+  pending: boolean
+  channelCount: number
+  deadExcluded: number
+  previousChannelCount: number
+  sample: string
 }
